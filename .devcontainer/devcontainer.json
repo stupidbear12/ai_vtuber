@@ -1,0 +1,22 @@
+{
+  "name": "ai-vtuber dev",
+  "build": {
+    "dockerfile": "../docker/Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/app",
+  "mounts": [
+    "source=${localWorkspaceFolder}/app,target=/app,type=bind"
+  ],
+  "postCreateCommand": "pip install --no-cache-dir -r /app/requirements.txt",
+  "forwardPorts": [8000],
+  "remoteUser": "root",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}
