@@ -8,9 +8,14 @@
   "mounts": [
     "source=${localWorkspaceFolder}/app,target=/app,type=bind"
   ],
+  "runArgs": ["--gpus", "all"],
   "postCreateCommand": "pip install --no-cache-dir -r /app/requirements.txt",
   "forwardPorts": [8000],
   "remoteUser": "root",
+  "containerEnv": {
+    "PYTHONPATH": "/app",
+    "TF_CPP_MIN_LOG_LEVEL": "1"
+  },
   "customizations": {
     "vscode": {
       "extensions": [

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import llm.tf_setup
 
 app = FastAPI()
 

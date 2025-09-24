@@ -3,6 +3,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from .tokenizer import SimpleCharTokenizer
+import llm.tf_setup
 
 MODEL_PATH = os.environ.get("VTUBER_MODEL_PATH", "llm/model/model.keras")
 

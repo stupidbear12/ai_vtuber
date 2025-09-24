@@ -14,6 +14,7 @@ class SimpleCharTokenizer:
        
         self.vocab = ["<pad>", "<bos>", "<eos>", "<unk>"] + chars
 
+
        
         self.stoi = {ch: i for i, ch in enumerate(self.vocab)}
         self.itos = {i: ch for ch, i in self.stoi.items()}

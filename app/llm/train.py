@@ -3,6 +3,7 @@ import tensorflow as tf
 from .model import build_char_transformer
 from .data import build_tf_dataset
 from .tokenizer import SimpleCharTokenizer
+import llm.tf_setup
 
 MAX_LEN = 128
 BATCH = 32

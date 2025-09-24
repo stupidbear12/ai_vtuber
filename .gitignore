@@ -1,4 +1,11 @@
-_pyache_/
+__pycache__/
 *.pyc
 .vscode/
-
+.idea/
+.DS_Store
+venv/
+.env
+*.log
+checkpoints/
+llm/model/*
+!llm/model/.gitkeep
