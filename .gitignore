@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+vts_token.json
+output_scripts/
+output_audio/
+*.wav
+*.mp3
+lofi_tracks/
+.DS_Store
+Thumbs.db
