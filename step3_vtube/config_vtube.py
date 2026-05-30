@@ -8,25 +8,36 @@ PLUGIN_DEVELOPER = "emeth"
 PLUGIN_ICON = None
 TOKEN_FILE = "./vts_token.json"
 
-# ─── Live2D 파라미터 이름 (Akari 기준, 모델에 따라 조정) ──
+# ─── VTube Studio 트래킹 파라미터 이름 ───────────────────
+# VTube Studio는 Live2D 내부 파라미터(Param*)가 아닌 트래킹 파라미터에만 주입 가능
 PARAM_FACE_ANGLE_X   = "FaceAngleX"      # 고개 좌우 (-30 ~ 30)
 PARAM_FACE_ANGLE_Y   = "FaceAngleY"      # 고개 상하 (-30 ~ 30)
 PARAM_FACE_ANGLE_Z   = "FaceAngleZ"      # 고개 기울임 (-30 ~ 30)
+PARAM_FACE_ANGRY     = "FaceAngry"       # 화난 표정 강도 (항상 0.0 고정)
 PARAM_EYE_OPEN_L     = "EyeOpenLeft"     # 왼눈 크기 (0 ~ 1)
 PARAM_EYE_OPEN_R     = "EyeOpenRight"    # 오른눈 크기 (0 ~ 1)
-PARAM_EYE_SMILE_L    = "EyeSmileLeft"    # 왼눈 웃음 (0 ~ 1)
-PARAM_EYE_SMILE_R    = "EyeSmileRight"   # 오른눈 웃음 (0 ~ 1)
-PARAM_BROW_L         = "BrowLeftY"       # 왼눈썹 높이 (-1 ~ 1)
-PARAM_BROW_R         = "BrowRightY"      # 오른눈썹 높이 (-1 ~ 1)
+PARAM_EYE_SMILE_L    = "EyeSmileLeft"    # 왼눈 웃음 (0 ~ 1, 모델에 따라 가용 여부 다름)
+PARAM_EYE_SMILE_R    = "EyeSmileRight"   # 오른눈 웃음 (0 ~ 1, 모델에 따라 가용 여부 다름)
+PARAM_EYE_LEFT_X     = "EyeLeftX"        # 왼눈 시선 좌우 (-1 ~ 1)
+PARAM_EYE_RIGHT_X    = "EyeRightX"       # 오른눈 시선 좌우 (-1 ~ 1)
+PARAM_EYE_LEFT_Y     = "EyeLeftY"        # 왼눈 시선 상하 (-1 ~ 1)
+PARAM_EYE_RIGHT_Y    = "EyeRightY"       # 오른눈 시선 상하 (-1 ~ 1)
+PARAM_BROW_L         = "BrowLeftY"       # 왼눈썹 높이 (BROW_VALUE_MIN ~ BROW_VALUE_MAX)
+PARAM_BROW_R         = "BrowRightY"      # 오른눈썹 높이 (BROW_VALUE_MIN ~ BROW_VALUE_MAX)
 PARAM_BROW_FORM_L    = "BrowLeftForm"    # 왼눈썹 모양 (-1 ~ 1)
 PARAM_BROW_FORM_R    = "BrowRightForm"   # 오른눈썹 모양 (-1 ~ 1)
-PARAM_MOUTH_OPEN     = "MouthOpenY"      # 입 벌림 (0 ~ 1)
-PARAM_MOUTH_FORM     = "MouthForm"       # 입 모양 (-1 웃음 ~ 1 슬픔 반대)
+PARAM_MOUTH_OPEN     = "MouthOpen"       # 입 벌림 (0 ~ 1)  ← MouthOpenY 아님
+PARAM_MOUTH_FORM     = "MouthSmile"      # 입 미소 (0 ~ 1)  ← MouthForm / MouthSmile
 PARAM_BODY_ANGLE_X   = "BodyAngleX"      # 몸 좌우 (-10 ~ 10)
 PARAM_BODY_ANGLE_Y   = "BodyAngleY"      # 몸 앞뒤 (-10 ~ 10)
 PARAM_BREATH         = "ParamBreath"     # 호흡 (0 ~ 1)
 PARAM_HAIR_SIDE      = "HairFront"       # 앞 사이드 머리카락 (-10 ~ 10, 모델에 따라 조정)
 PARAM_HAIR_BACK      = "HairBack"        # 뒷 머리카락 (-10 ~ 10, 모델에 따라 조정)
+
+# ─── 눈썹 안전 범위 (슬픈 눈 방지) ─────────────────────
+# BrowLeftY / BrowRightY 는 항상 이 범위 안에서만 사용
+BROW_VALUE_MIN = 0.05   # 최솟값 (0.0 이하면 슬픈/화난 눈썹이 됨)
+BROW_VALUE_MAX = 0.55   # 최댓값
 
 # ─── 표정 세트 (VTube Studio 핫키 이름) ──────────────────
 EXPRESSIONS = {

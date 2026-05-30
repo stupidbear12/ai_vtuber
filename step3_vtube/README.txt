@@ -77,7 +77,10 @@ pip install pydub            # 가벼운 대안
 VTube Studio가 실행 중이고 API가 활성화된 상태에서:
 
   cd C:\Users\thtgg\mydream\vtuber-auto
-  python -m step3_vtube.test_vtube
+  python step3_vtube/test_vtube.py
+
+  ※ -m 방식(python -m step3_vtube.test_vtube)은 내부 임포트 경로 문제로
+     직접 스크립트 실행 방식을 권장합니다.
 
 -------------------------------------------------------
 8. API 서버 실행 방법 (step1~3 통합)
@@ -89,15 +92,47 @@ VTube Studio가 실행 중이고 API가 활성화된 상태에서:
 VTube Studio 제어: POST /control-vtube
 통합 파이프라인:   POST /run-pipeline (use_vtube: true 설정 시 VTS 연동)
 
+v0.7.0 전체 리깅 애니메이션 API:
+  POST /vtube/animation/start  - 전체 리깅 애니메이션 시작
+  POST /vtube/animation/stop   - 애니메이션 정지
+  POST /vtube/emotion          - 감정 변경 (calm/happy/surprised/thinking)
+  POST /vtube/reaction         - 즉각 반응 (chat_superchat/surprised/nod/shake)
+  POST /vtube/speak            - 립싱크 + 감정 동시 처리
+
 -------------------------------------------------------
 9. 파일 구조
 -------------------------------------------------------
 step3_vtube/
-  config_vtube.py     - API 설정값 (포트, 파라미터 이름 등)
-  vtube_controller.py - VTubeController 클래스 (메인 모듈)
-  lipsync.py          - 오디오 분석 립싱크 값 생성
-  test_vtube.py       - 연결/기능 테스트 스크립트
-  README.txt          - 이 파일
+  config_vtube.py          - API 설정값 (포트, 파라미터 이름 등)
+  vtube_controller.py      - VTubeController 클래스 (메인 모듈)
+  animations.py            - AnimationEngine (레거시 호환용)
+  animation_controller.py  - AnimationController (전체 리깅 오케스트레이터)
+  rigging_animation.py     - 개별 애니메이션 레이어 클래스들
+  lipsync.py               - 오디오 분석 립싱크 값 생성
+  test_vtube.py            - 연결/기능 테스트 스크립트
+  README.txt               - 이 파일
+
+-------------------------------------------------------
+10. Windows 한글 인코딩 문제 해결 (중요)
+-------------------------------------------------------
+Windows 환경에서 cp949(EUC-KR) 인코딩으로 인해 한글이 깨질 수 있습니다.
+반드시 아래 환경변수를 설정한 후 실행하세요:
+
+  방법 A - 실행 시 직접 지정 (권장):
+    set PYTHONUTF8=1 && python step3_vtube/test_vtube.py
+    set PYTHONUTF8=1 && uvicorn api.main:app --reload
+
+  방법 B - 시스템 환경변수 영구 등록:
+    1) Windows 키 → "시스템 환경 변수 편집" 검색
+    2) "환경 변수" 클릭 → 시스템 변수에서 "새로 만들기"
+    3) 변수 이름: PYTHONUTF8   값: 1
+
+  방법 C - PowerShell 세션 내 임시 적용:
+    $env:PYTHONUTF8 = "1"
+    python step3_vtube/test_vtube.py
+
+모든 Python 파일 상단에 # -*- coding: utf-8 -*- 헤더가 포함되어 있으나,
+Windows 터미널 출력(stdout)은 PYTHONUTF8=1 없이는 여전히 깨질 수 있습니다.
 
 -------------------------------------------------------
 주의사항
@@ -106,5 +141,9 @@ step3_vtube/
 - WebSocket API는 로컬 전용입니다 (localhost:8001)
 - 립싱크는 실제 오디오 재생과 별도로 파라미터만 제어합니다
   (오디오 재생은 별도 처리 필요)
-- pyvts 버전에 따라 API 호출 방식이 다를 수 있습니다
-  (작성 기준: pyvts 0.3.x)
+- pyvts API 호환성: 이 코드는 현행 pyvts API 기준으로 작성되었습니다
+    표정 전환: requestTriggerHotKey(hotkeyID)   ← VTS 핫키 이름과 일치해야 함
+    파라미터:  requestSetMultiParameterValue()  ← InjectParameterDataRequest 대체
+    모델 정보: BaseRequest("CurrentModelRequest")
+- 표정 핫키(EXPRESSIONS)는 VTube Studio에서 사전 등록 필요
+  (설정 > 표정 탭 > 핫키 이름을 config_vtube.py EXPRESSIONS 값과 동일하게)

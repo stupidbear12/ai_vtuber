@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 api/main.py - emeth 방송 자동화 파이프라인 FastAPI 서버 (v0.7.0)
 실행 (vtuber-auto/ 루트에서):

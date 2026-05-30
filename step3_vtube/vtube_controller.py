@@ -78,7 +78,9 @@ class VTubeController:
     async def get_model_info(self) -> dict:
         """현재 로드된 모델 원시 응답 반환"""
         self._check()
-        resp = await self.vts.request(self.vts.vts_request.CurrentModelRequest())
+        resp = await self.vts.request(
+            self.vts.vts_request.BaseRequest("CurrentModelRequest")
+        )
         return resp
 
     async def get_current_model(self) -> dict:
@@ -88,7 +90,9 @@ class VTubeController:
         """
         self._check()
         try:
-            resp = await self.vts.request(self.vts.vts_request.CurrentModelRequest())
+            resp = await self.vts.request(
+                self.vts.vts_request.BaseRequest("CurrentModelRequest")
+            )
             data = resp.get("data", {})
             return {
                 "model_loaded":   data.get("modelLoaded", False),
@@ -109,8 +113,8 @@ class VTubeController:
         value = max(0.0, min(1.0, value))
         try:
             await self.vts.request(
-                self.vts.vts_request.InjectParameterDataRequest(
-                    [(PARAM_MOUTH_OPEN, value)], face_found=False
+                self.vts.vts_request.requestSetParameterValue(
+                    PARAM_MOUTH_OPEN, value, face_found=False
                 )
             )
         except Exception:
@@ -131,25 +135,29 @@ class VTubeController:
         """모델의 Live2D 파라미터 목록 반환"""
         self._check()
         resp = await self.vts.request(
-            self.vts.vts_request.ParameterListRequest()
+            self.vts.vts_request.BaseRequest("ParameterListRequest")
         )
         return resp.get("data", {}).get("parameters", [])
 
     # ── 표정 제어 ──────────────────────────────────────────
 
     async def set_expression(self, name: str):
-        """표정 전환 (VTube Studio 핫키 트리거)"""
+        """
+        표정 전환 — VTube Studio 핫키 트리거 방식.
+
+        pyvts 최신 버전에서 ExpressionActivationRequest 가 제거되었으므로
+        requestTriggerHotKey(hotkeyID) 를 사용합니다.
+        hotkeyID 는 VTube Studio 에서 설정한 핫키 이름(또는 ID)과 일치해야 합니다.
+        EXPRESSIONS 딕셔너리의 값이 핫키 이름으로 사용됩니다.
+        """
         self._check()
-        expr_name = EXPRESSIONS.get(name, name)
+        hotkey_name = EXPRESSIONS.get(name, name)
         try:
             await self.vts.request(
-                self.vts.vts_request.ExpressionActivationRequest(
-                    expression_file=f"{expr_name}.exp3.json",
-                    active=True
-                )
+                self.vts.vts_request.requestTriggerHotKey(hotkey_name)
             )
         except Exception as e:
-            print(f"[경고] 표정 전환 실패 ({expr_name}): {e}")
+            print(f"[경고] 표정 전환 실패 ({hotkey_name}): {e}")
 
     # ── 애니메이션 제어 ────────────────────────────────────
 

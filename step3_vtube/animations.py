@@ -74,8 +74,8 @@ class AnimationEngine:
         """단일 파라미터 즉시 설정"""
         try:
             await self.api.request(
-                self.api.vts_request.InjectParameterDataRequest(
-                    [(param, value)], face_found=False
+                self.api.vts_request.requestSetParameterValue(
+                    param, value, face_found=False
                 )
             )
         except Exception:
@@ -84,10 +84,11 @@ class AnimationEngine:
     async def _set_multi(self, params: dict):
         """여러 파라미터 동시 설정"""
         try:
-            items = list(params.items())
+            keys   = list(params.keys())
+            values = list(params.values())
             await self.api.request(
-                self.api.vts_request.InjectParameterDataRequest(
-                    items, face_found=False
+                self.api.vts_request.requestSetMultiParameterValue(
+                    keys, values, face_found=False
                 )
             )
         except Exception:

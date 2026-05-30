@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 animation_controller.py - 전체 애니메이션 레이어 오케스트레이터
 
@@ -41,16 +42,21 @@ from rigging_animation import (
 )
 from config_vtube import (
     PARAM_FACE_ANGLE_X, PARAM_FACE_ANGLE_Y, PARAM_FACE_ANGLE_Z,
+    PARAM_FACE_ANGRY,
     PARAM_EYE_OPEN_L, PARAM_EYE_OPEN_R,
     PARAM_EYE_SMILE_L, PARAM_EYE_SMILE_R,
     PARAM_BROW_L, PARAM_BROW_R,
     PARAM_BROW_FORM_L, PARAM_BROW_FORM_R,
     PARAM_MOUTH_OPEN, PARAM_MOUTH_FORM,
     PARAM_BODY_ANGLE_X, PARAM_BODY_ANGLE_Y, PARAM_BREATH,
+    BROW_VALUE_MIN, BROW_VALUE_MAX,
 )
 
 # 립싱크 레이어 우선순위: TalkingAnimation(25) 위, Reaction(40) 아래
 PRIORITY_LIPSYNC = 28
+
+# 눈썹 파라미터 집합 — write 시 clamp 적용 대상
+_BROW_PARAMS = {PARAM_BROW_L, PARAM_BROW_R}
 
 
 class AnimationController:
@@ -99,14 +105,31 @@ class AnimationController:
     # ── 내부: VTubeStudio 파라미터 주입 ─────────────────────
 
     async def _write_params(self, params: Dict[str, float]):
-        """InjectParameterDataRequest로 파라미터 일괄 전송"""
+        """
+        requestSetMultiParameterValue로 파라미터 일괄 전송.
+
+        추가 규칙 (매 프레임 강제 적용):
+          - face_found=True  : VTubeStudio가 얼굴 추적 중으로 인식
+          - FaceAngry=0.0    : 항상 0으로 고정 (화난 표정 방지)
+          - BrowLeftY / BrowRightY : BROW_VALUE_MIN ~ BROW_VALUE_MAX 범위로 clamp
+        """
         if not params:
             return
         try:
-            items = list(params.items())
+            sanitized = {}
+            for k, v in params.items():
+                if k in _BROW_PARAMS:
+                    # 눈썹은 항상 양수 범위 유지
+                    v = max(BROW_VALUE_MIN, min(BROW_VALUE_MAX, v))
+                sanitized[k] = v
+            # FaceAngry 항상 0.0 강제 주입
+            sanitized[PARAM_FACE_ANGRY] = 0.0
+
+            keys   = list(sanitized.keys())
+            values = list(sanitized.values())
             await self.api.request(
-                self.api.vts_request.InjectParameterDataRequest(
-                    items, face_found=False
+                self.api.vts_request.requestSetMultiParameterValue(
+                    keys, values, face_found=True   # ← True: 얼굴 추적 중으로 인식
                 )
             )
         except Exception:

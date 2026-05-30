@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 rigging_animation.py - emeth 전체 리깅 애니메이션 레이어 모듈
 
@@ -34,6 +35,7 @@ from config_vtube import (
     IDLE_BREATH_PERIOD, IDLE_BLINK_MIN, IDLE_BLINK_MAX,
     IDLE_BLINK_DURATION, IDLE_HEAD_AMPLITUDE, IDLE_HEAD_PERIOD,
     IDLE_BODY_AMPLITUDE, SPEAKING_EYE_SQUINT,
+    BROW_VALUE_MIN, BROW_VALUE_MAX,
 )
 
 # ─── 상수 ────────────────────────────────────────────────────
@@ -412,13 +414,16 @@ class HairPhysics(BaseAnimation):
 # ─── EmotionAnimation ─────────────────────────────────────────
 
 # 감정 상태별 표정 파라미터 프리셋
-# PARAM_MOUTH_FORM: 양수 = 웃음(smile) 방향 (animations.py 사용 패턴 기준)
+# 규칙:
+#   - PARAM_BROW_L / PARAM_BROW_R (BrowLeftY / BrowRightY) 는 항상 양수
+#     (BROW_VALUE_MIN ~ BROW_VALUE_MAX 범위 유지 — 0 이하면 슬픈/화난 눈썹)
+#   - PARAM_MOUTH_FORM (MouthSmile): 0~1, 클수록 미소
 EMOTION_PRESETS: Dict[str, Dict[str, float]] = {
     "calm": {
         PARAM_EYE_SMILE_L: 0.0,
         PARAM_EYE_SMILE_R: 0.0,
-        PARAM_BROW_L:      0.0,
-        PARAM_BROW_R:      0.0,
+        PARAM_BROW_L:      BROW_VALUE_MIN,   # 0.05 — 최솟값으로 중립 유지
+        PARAM_BROW_R:      BROW_VALUE_MIN,
         PARAM_BROW_FORM_L: 0.0,
         PARAM_BROW_FORM_R: 0.0,
         PARAM_MOUTH_FORM:  0.0,
@@ -426,29 +431,29 @@ EMOTION_PRESETS: Dict[str, Dict[str, float]] = {
     "happy": {
         PARAM_EYE_SMILE_L: 0.55,
         PARAM_EYE_SMILE_R: 0.55,
-        PARAM_BROW_L:      0.10,
-        PARAM_BROW_R:      0.10,
+        PARAM_BROW_L:      0.20,             # 0.05~0.55 범위 내
+        PARAM_BROW_R:      0.20,
         PARAM_BROW_FORM_L: 0.0,
         PARAM_BROW_FORM_R: 0.0,
-        PARAM_MOUTH_FORM:  0.35,
+        PARAM_MOUTH_FORM:  0.40,
     },
     "surprised": {
         PARAM_EYE_SMILE_L: 0.0,
         PARAM_EYE_SMILE_R: 0.0,
-        PARAM_BROW_L:      0.45,
-        PARAM_BROW_R:      0.45,
-        PARAM_BROW_FORM_L: -0.30,
-        PARAM_BROW_FORM_R: -0.30,
+        PARAM_BROW_L:      BROW_VALUE_MAX,   # 0.55 — 최댓값으로 눈썹 치켜올림
+        PARAM_BROW_R:      BROW_VALUE_MAX,
+        PARAM_BROW_FORM_L: 0.0,             # 음수 형태 제거
+        PARAM_BROW_FORM_R: 0.0,
         PARAM_MOUTH_FORM:  0.0,
     },
     "thinking": {
         PARAM_EYE_SMILE_L: 0.0,
         PARAM_EYE_SMILE_R: 0.0,
-        PARAM_BROW_L:      -0.10,
-        PARAM_BROW_R:       0.20,
-        PARAM_BROW_FORM_L: -0.10,
-        PARAM_BROW_FORM_R:  0.0,
-        PARAM_MOUTH_FORM:   0.10,
+        PARAM_BROW_L:      BROW_VALUE_MIN,   # 0.05 — 좌우 비대칭 대신 최솟값 사용
+        PARAM_BROW_R:      0.25,             # 오른쪽만 살짝 올라간 생각하는 표정
+        PARAM_BROW_FORM_L: 0.0,
+        PARAM_BROW_FORM_R: 0.0,
+        PARAM_MOUTH_FORM:  0.05,
     },
 }
 
@@ -541,7 +546,8 @@ class TalkingAnimation(BaseAnimation):
     LAYER_ID = "talking"
     PRIORITY = PRIORITY_TALKING
 
-    BROW_MICRO_AMP  = 0.06   # 눈썹 미세 흔들림 진폭
+    # 눈썹 미세 진동: BROW_VALUE_MIN 기준으로 ±AMP 진동 → 항상 양수 보장
+    BROW_MICRO_AMP  = 0.04   # 미세 흔들림 진폭 (BROW_VALUE_MIN + AMP ≤ BROW_VALUE_MAX)
     BROW_MICRO_FREQ = 0.9    # 눈썹 미세 흔들림 주기 (초)
 
     def __init__(self, state: LayeredParamState):
@@ -562,8 +568,8 @@ class TalkingAnimation(BaseAnimation):
                     elapsed = time.time() - t_start
                     # 눈 좁아짐
                     eye_val = SPEAKING_EYE_SQUINT
-                    # 눈썹 미세 사인파
-                    brow_micro = self.BROW_MICRO_AMP * math.sin(
+                    # 눈썹 미세 사인파: BROW_VALUE_MIN 기준으로 ±AMP 진동 → 항상 양수
+                    brow_micro = BROW_VALUE_MIN + self.BROW_MICRO_AMP * math.sin(
                         2 * math.pi * elapsed / self.BROW_MICRO_FREQ
                     )
                     self.state.set_layer(
