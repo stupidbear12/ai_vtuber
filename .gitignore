@@ -1,0 +1,11 @@
+data/raw/ 
+data/processed/ 
+data/*.zip 
+checkpoints/ 
+samples/ 
+*.bat 
+__pycache__/ 
+*.pyc 
+.env 
+data/*_log.txt 
+data/*_complete.txt 

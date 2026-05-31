@@ -1,0 +1,23 @@
+# ──────────────────────────────────────────────────────────────
+# Lofi Diffusion — PyTorch 의존성
+# CUDA 12.4 설치:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# CPU 전용:
+#   pip install torch torchvision
+# ──────────────────────────────────────────────────────────────
+
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 오디오 처리
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# 수치 연산
+numpy>=1.24.0
+
+# 시각화
+matplotlib>=3.7.0
+
+# 진행바
+tqdm>=4.65.0
