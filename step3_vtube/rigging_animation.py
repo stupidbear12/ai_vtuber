@@ -136,8 +136,7 @@ class BaseAnimation:
         if self._task and not self._task.done():
             return
         self._running = True
-        loop = asyncio.get_event_loop()
-        self._task = loop.create_task(self._run())
+        self._task = asyncio.get_running_loop().create_task(self._run())
 
     def stop(self):
         """애니메이션 태스크 정지 및 레이어 제거"""
@@ -437,20 +436,29 @@ EMOTION_PRESETS: Dict[str, Dict[str, float]] = {
         PARAM_BROW_FORM_R: 0.0,
         PARAM_MOUTH_FORM:  0.40,
     },
+    "sad": {
+        PARAM_EYE_SMILE_L: 0.0,
+        PARAM_EYE_SMILE_R: 0.0,
+        PARAM_BROW_L:      BROW_VALUE_MIN,   # 눈썹 하한 유지 (0 이하 금지)
+        PARAM_BROW_R:      BROW_VALUE_MIN,
+        PARAM_BROW_FORM_L: 0.3,             # 눈썹 안쪽이 올라가는 슬픈 형태
+        PARAM_BROW_FORM_R: 0.3,
+        PARAM_MOUTH_FORM:  -0.2,            # 입꼬리 살짝 내림
+    },
     "surprised": {
         PARAM_EYE_SMILE_L: 0.0,
         PARAM_EYE_SMILE_R: 0.0,
         PARAM_BROW_L:      BROW_VALUE_MAX,   # 0.55 — 최댓값으로 눈썹 치켜올림
         PARAM_BROW_R:      BROW_VALUE_MAX,
-        PARAM_BROW_FORM_L: 0.0,             # 음수 형태 제거
+        PARAM_BROW_FORM_L: 0.0,
         PARAM_BROW_FORM_R: 0.0,
         PARAM_MOUTH_FORM:  0.0,
     },
     "thinking": {
         PARAM_EYE_SMILE_L: 0.0,
         PARAM_EYE_SMILE_R: 0.0,
-        PARAM_BROW_L:      BROW_VALUE_MIN,   # 0.05 — 좌우 비대칭 대신 최솟값 사용
-        PARAM_BROW_R:      0.25,             # 오른쪽만 살짝 올라간 생각하는 표정
+        PARAM_BROW_L:      BROW_VALUE_MIN,   # 좌우 비대칭 생각하는 표정
+        PARAM_BROW_R:      0.25,
         PARAM_BROW_FORM_L: 0.0,
         PARAM_BROW_FORM_R: 0.0,
         PARAM_MOUTH_FORM:  0.05,

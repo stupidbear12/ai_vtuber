@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>emeth Live2D Viewer</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg:      #1a1a2e;
+      --panel:   #16213e;
+      --card:    #0f3460;
+      --accent:  #7c6af7;
+      --accent2: #56cfb2;
+      --text:    #e0e0e0;
+      --muted:   #888;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', sans-serif;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+      font-size: 13px;
+    }
+
+    /* ── 캔버스 영역 ── */
+    #canvas-wrap {
+      flex: 1;
+      position: relative;
+      min-width: 0;
+    }
+    #live2d-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── 사이드 패널 ── */
+    #panel {
+      width: 270px;
+      min-width: 270px;
+      background: var(--panel);
+      border-left: 1px solid #2a2a4a;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+
+    h2 {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    /* 상태 표시 */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+    .dot.connected { background: var(--accent2); }
+    .dot.error     { background: #f76c6c; }
+
+    /* 슬라이더 */
+    .slider-row { margin-top: 7px; }
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 2px;
+    }
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+      height: 4px;
+      cursor: pointer;
+    }
+
+    /* 버튼 그룹 */
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 7px;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 5px 11px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: filter 0.15s;
+    }
+    button:hover { filter: brightness(1.15); }
+    button.sec {
+      background: #2a2a4a;
+    }
+    button.sec:hover { background: #3a3a5a; filter: none; }
+
+    /* 모델 경로 입력 */
+    input[type=text] {
+      width: 100%;
+      background: #1a1a2e;
+      border: 1px solid #3a3a5a;
+      color: var(--text);
+      padding: 5px 8px;
+      border-radius: 5px;
+      font-size: 11px;
+      margin-top: 6px;
+      font-family: monospace;
+    }
+
+    /* 로그 */
+    #log {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--muted);
+      max-height: 90px;
+      overflow-y: auto;
+      line-height: 1.5;
+    }
+    #log div { border-bottom: 1px solid #1a1a2e; padding: 1px 0; }
+  </style>
+</head>
+<body>
+
+<div id="canvas-wrap">
+  <canvas id="live2d-canvas"></canvas>
+</div>
+
+<div id="panel">
+
+  <div class="card">
+    <h2>상태</h2>
+    <div class="status-row">
+      <div class="dot" id="ws-dot"></div>
+      <span id="ws-label">서버 미연결</span>
+    </div>
+    <div class="status-row">
+      <div class="dot" id="model-dot"></div>
+      <span id="model-label">모델 없음</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>모델</h2>
+    <input type="text" id="model-path" placeholder="models/Haru/Haru.model3.json">
+    <div class="btn-row" style="margin-top:6px">
+      <button id="btn-load">로드</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>파라미터 수동 제어</h2>
+
+    <div class="slider-row">
+      <div class="slider-label"><span>고개 X</span><span id="v-angle-x">0</span></div>
+      <input type="range" id="s-angle-x" min="-30" max="30" value="0" step="0.5">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>고개 Y</span><span id="v-angle-y">0</span></div>
+      <input type="range" id="s-angle-y" min="-30" max="30" value="0" step="0.5">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>고개 Z (기울임)</span><span id="v-angle-z">0</span></div>
+      <input type="range" id="s-angle-z" min="-30" max="30" value="0" step="0.5">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>눈 (왼)</span><span id="v-eye-l">1.00</span></div>
+      <input type="range" id="s-eye-l" min="0" max="1" value="1" step="0.01">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>눈 (오른)</span><span id="v-eye-r">1.00</span></div>
+      <input type="range" id="s-eye-r" min="0" max="1" value="1" step="0.01">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>입 열림</span><span id="v-mouth">0.00</span></div>
+      <input type="range" id="s-mouth" min="0" max="1" value="0" step="0.01">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>미소</span><span id="v-smile">0.00</span></div>
+      <input type="range" id="s-smile" min="-1" max="1" value="0" step="0.01">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label"><span>호흡</span><span id="v-breath">0.00</span></div>
+      <input type="range" id="s-breath" min="0" max="1" value="0" step="0.01">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>자동 애니메이션</h2>
+    <div class="btn-row">
+      <button id="btn-idle">Idle 시작</button>
+      <button id="btn-stop" class="sec">정지</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>감정</h2>
+    <div class="btn-row">
+      <button class="sec" data-emotion="calm">차분</button>
+      <button class="sec" data-emotion="happy">기쁨</button>
+      <button class="sec" data-emotion="surprised">놀람</button>
+      <button class="sec" data-emotion="thinking">생각</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>반응 애니메이션</h2>
+    <div class="btn-row">
+      <button class="sec" data-reaction="nod">끄덕임</button>
+      <button class="sec" data-reaction="shake">고개젓기</button>
+      <button class="sec" data-reaction="surprised">놀람</button>
+      <button class="sec" data-reaction="superchat">슈퍼챗</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>로그</h2>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<!-- 1. PixiJS v8 -->
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
+<!--
+  2. Cubism Core v5 (live2d_web/cubism/ 에 배치)
+     출처: npm @hazart-pkg/live2d-core@1.0.1 (Cubism SDK Core 5.0.0)
+-->
+<script src="cubism/live2dcubismcore.min.js"></script>
+<!-- 3. pixi-live2d-display (Cubism 5 + PixiJS v8 지원) -->
+<script src="https://cdn.jsdelivr.net/npm/@naari3/pixi-live2d-display@1.2.5/dist/cubism5.min.js"></script>
+
+<!-- 앱 스크립트 -->
+<script src="js/anim.js"></script>
+<script src="js/ws_client.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

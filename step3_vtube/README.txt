@@ -92,10 +92,13 @@ VTube Studio가 실행 중이고 API가 활성화된 상태에서:
 VTube Studio 제어: POST /control-vtube
 통합 파이프라인:   POST /run-pipeline (use_vtube: true 설정 시 VTS 연동)
 
-v0.7.0 전체 리깅 애니메이션 API:
+v0.8.0 VTube Studio 제어 API 전체 목록:
+  GET  /vtube/status           - 연결 상태 및 애니메이션 활성 여부 조회
+  POST /vtube/connect          - VTube Studio 연결 및 플러그인 인증
+  POST /vtube/disconnect       - 연결 해제 (애니메이션 자동 정지)
   POST /vtube/animation/start  - 전체 리깅 애니메이션 시작
   POST /vtube/animation/stop   - 애니메이션 정지
-  POST /vtube/emotion          - 감정 변경 (calm/happy/surprised/thinking)
+  POST /vtube/emotion          - 감정 변경 (calm/happy/sad/surprised/thinking)
   POST /vtube/reaction         - 즉각 반응 (chat_superchat/surprised/nod/shake)
   POST /vtube/speak            - 립싱크 + 감정 동시 처리
 

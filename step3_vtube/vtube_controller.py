@@ -262,10 +262,11 @@ class VTubeController:
             return
 
         # 레거시 방식: AnimationEngine 직접 사용
-        start_time = asyncio.get_event_loop().time()
+        _loop = asyncio.get_running_loop()
+        start_time = _loop.time()
         for timestamp_ms, mouth_val in frames:
             target_time = start_time + timestamp_ms / 1000.0
-            now = asyncio.get_event_loop().time()
+            now = _loop.time()
             wait = target_time - now
             if wait > 0:
                 await asyncio.sleep(wait)

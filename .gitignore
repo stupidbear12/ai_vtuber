@@ -1,11 +1,19 @@
-data/raw/ 
-data/processed/ 
-data/*.zip 
-checkpoints/ 
-samples/ 
-*.bat 
-__pycache__/ 
-*.pyc 
-.env 
-data/*_log.txt 
-data/*_complete.txt 
+data/raw/
+data/processed/
+data/*.zip
+checkpoints/
+samples/
+*.bat
+__pycache__/
+*.pyc
+.env
+data/*_log.txt
+data/*_complete.txt
+
+# VTube Studio auth tokens (sensitive)
+vts_token.json
+
+# Live2D binary / asset files (license restrictions)
+*.moc3
+live2d_web/models/**/*.png
+live2d_web/cubism/live2dcubismcore.min.js

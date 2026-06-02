@@ -168,8 +168,9 @@ class AnimationEngine:
     def _start_idle(self, breath_period: float = None):
         """아이들 루프 백그라운드 시작"""
         self.stop_idle()
-        loop = asyncio.get_event_loop()
-        self._idle_task = loop.create_task(self._idle_loop(breath_period))
+        self._idle_task = asyncio.get_running_loop().create_task(
+            self._idle_loop(breath_period)
+        )
 
     def stop_idle(self):
         """아이들 루프 정지"""
@@ -205,7 +206,7 @@ class AnimationEngine:
         await asyncio.sleep(0.3)
 
         # 살짝 미소
-        await self._animate("PARAM_MOUTH_FORM", 0.0, 0.3, 0.8)
+        await self._animate(PARAM_MOUTH_FORM, 0.0, 0.3, 0.8)
         await asyncio.sleep(0.5)
 
         # 아이들로 전환

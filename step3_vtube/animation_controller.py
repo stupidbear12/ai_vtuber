@@ -152,8 +152,7 @@ class AnimationController:
         if self._write_task and not self._write_task.done():
             return
         self._running = True
-        loop = asyncio.get_event_loop()
-        self._write_task = loop.create_task(self._write_loop())
+        self._write_task = asyncio.get_running_loop().create_task(self._write_loop())
 
     def _stop_write_loop(self):
         self._running = False
@@ -220,7 +219,7 @@ class AnimationController:
         if self._lipsync_task and not self._lipsync_task.done():
             self._lipsync_task.cancel()
 
-        self._lipsync_task = asyncio.get_event_loop().create_task(
+        self._lipsync_task = asyncio.get_running_loop().create_task(
             self._run_lipsync(audio_path)
         )
         await self._lipsync_task
@@ -233,7 +232,7 @@ class AnimationController:
         print(f"[AnimCtrl] 립싱크 시작: {audio_path}")
 
         try:
-            frames = await asyncio.get_event_loop().run_in_executor(
+            frames = await asyncio.get_running_loop().run_in_executor(
                 None, analyze_audio, audio_path
             )
         except Exception as e:
@@ -246,11 +245,12 @@ class AnimationController:
             self._talking.set_active(False)
             return
 
-        start_time = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        start_time = loop.time()
         try:
             for timestamp_ms, mouth_val in frames:
                 target_time = start_time + timestamp_ms / 1000.0
-                wait = target_time - asyncio.get_event_loop().time()
+                wait = target_time - loop.time()
                 if wait > 0:
                     await asyncio.sleep(wait)
                 # 립싱크 레이어를 상태에 기록 (write loop가 VTS에 전송)
@@ -308,8 +308,7 @@ class AnimationController:
             print(f"[AnimCtrl] 알 수 없는 reaction 타입: {reaction_type}")
             return
 
-        loop = asyncio.get_event_loop()
-        self._reaction_task = loop.create_task(fn())
+        self._reaction_task = asyncio.get_running_loop().create_task(fn())
         print(f"[AnimCtrl] reaction 시작: {reaction_type}")
 
     # ── 반응 애니메이션 구현 ─────────────────────────────────

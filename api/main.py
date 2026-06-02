@@ -108,12 +108,22 @@ def update_status(**kwargs):
 app = FastAPI(
     title="emeth 방송 자동화 API",
     description="스크립트 생성 + TTS + VTube Studio + OBS 제어 + YouTube 라이브 방송 통합 파이프라인",
-    version="0.7.0",
+    version="0.8.0",
 )
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Live2D 웹 뷰어 라우터 통합
+try:
+    sys.path.insert(0, ROOT_DIR)
+    from live2d_web.router import live2d_router, mount_static as _live2d_mount
+    app.include_router(live2d_router)
+    _live2d_mount(app)
+    print("[API] Live2D 웹 뷰어 라우터 등록 완료 → GET /live2d/")
+except Exception as _e:
+    print(f"[API] Live2D 웹 뷰어 라우터 등록 건너뜀: {_e}")
 
 
 # ------------------------------------------------------------------ 요청 모델
@@ -862,6 +872,54 @@ def _get_vtube_full_ctrl():
     return _vtube_full_ctrl
 
 
+@app.get(
+    "/vtube/status",
+    summary="VTube Studio 연결/애니메이션 상태 조회",
+)
+async def vtube_status():
+    global _vtube_full_ctrl
+    if _vtube_full_ctrl is None:
+        return {"connected": False, "animation_active": False}
+    return {
+        "connected":        _vtube_full_ctrl._connected,
+        "animation_active": _vtube_full_ctrl._full_anim_active,
+    }
+
+
+@app.post(
+    "/vtube/connect",
+    summary="VTube Studio 연결",
+    description="VTube Studio WebSocket API에 연결하고 플러그인 인증을 수행합니다.",
+)
+async def vtube_connect():
+    ctrl = _get_vtube_full_ctrl()
+    if ctrl._connected:
+        return {"success": True, "message": "이미 연결되어 있습니다."}
+    try:
+        await ctrl.connect()
+        return {"success": True, "message": "VTube Studio 연결 완료"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"VTube Studio 연결 실패: {e}")
+
+
+@app.post(
+    "/vtube/disconnect",
+    summary="VTube Studio 연결 해제",
+    description="애니메이션을 정지하고 WebSocket 연결을 닫습니다.",
+)
+async def vtube_disconnect():
+    global _vtube_full_ctrl
+    if _vtube_full_ctrl is None or not _vtube_full_ctrl._connected:
+        return {"success": True, "message": "이미 연결 해제 상태입니다."}
+    try:
+        await _vtube_full_ctrl.disconnect()
+        _vtube_full_ctrl = None
+        update_status(vtube_active=False)
+        return {"success": True, "message": "VTube Studio 연결 해제 완료"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"연결 해제 실패: {e}")
+
+
 @app.post(
     "/vtube/animation/start",
     summary="전체 리깅 애니메이션 시작",
@@ -911,12 +969,12 @@ async def vtube_animation_stop():
     summary="감정 상태 변경",
     description=(
         "0.8초 보간으로 자연스럽게 감정 표정을 전환합니다. "
-        "지원 감정: calm / happy / surprised / thinking. "
+        "지원 감정: calm / happy / sad / surprised / thinking. "
         "전체 애니메이션 시스템(/vtube/animation/start) 이 활성화된 상태여야 합니다."
     ),
 )
 async def vtube_emotion(request: VTubeEmotionRequest):
-    VALID = {"calm", "happy", "surprised", "thinking"}
+    VALID = {"calm", "happy", "sad", "surprised", "thinking"}
     if request.emotion not in VALID:
         raise HTTPException(
             status_code=400,

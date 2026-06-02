@@ -22,6 +22,56 @@ sys.path.insert(0, ROOT_DIR)
 from step3_vtube.vtube_controller import VTubeController
 
 
+async def test_load_haru(ctrl: VTubeController) -> bool:
+    """
+    Haru 모델 전환 테스트.
+    1) AvailableModelsRequest로 전체 모델 목록 조회
+    2) 이름에 'haru'(대소문자 무관)가 포함된 모델 검색
+    3) ModelLoadRequest로 전환
+    반환값: True=전환 성공, False=Haru 없음(건너뜀)
+    """
+    print("\n" + "=" * 50)
+    print("TEST 0: Haru 모델 전환")
+    print("=" * 50)
+    try:
+        resp = await ctrl.vts.request(
+            ctrl.vts.vts_request.BaseRequest("AvailableModelsRequest", {})
+        )
+        models = resp.get("data", {}).get("availableModels", [])
+        print(f"  사용 가능한 모델 ({len(models)}개):")
+        haru = None
+        for m in models:
+            name = m.get("modelName", "")
+            mid  = m.get("modelID", "")
+            print(f"    - {name}  (ID: {mid})")
+            if "haru" in name.lower():
+                haru = m
+
+        if haru is None:
+            print("[SKIP] Haru 모델을 찾지 못했습니다.")
+            print("       VTube Studio를 재시작하면 새 모델이 인식됩니다.")
+            return False
+
+        print(f"\n  → Haru 로드 중: {haru['modelName']} (ID: {haru['modelID']})")
+        load_resp = await ctrl.vts.request(
+            ctrl.vts.vts_request.BaseRequest(
+                "ModelLoadRequest",
+                {"modelID": haru["modelID"]}
+            )
+        )
+        loaded = load_resp.get("data", {}).get("modelID") == haru["modelID"]
+        if loaded:
+            print("[OK] Haru 모델 전환 완료")
+            await asyncio.sleep(2.0)   # 모델 로드 완료 대기
+            return True
+        else:
+            print(f"[WARN] 예상과 다른 응답: {load_resp}")
+            return False
+    except Exception as e:
+        print(f"[FAIL] Haru 모델 전환 실패: {e}")
+        return False
+
+
 async def test_connection(ctrl: VTubeController) -> bool:
     """연결 및 인증 테스트"""
     print("\n" + "=" * 50)
@@ -120,6 +170,38 @@ async def test_lipsync_file(ctrl: VTubeController, audio_path: str):
         print(f"[FAIL] 립싱크 오류: {e}")
 
 
+async def test_full_animation(ctrl: VTubeController):
+    """전체 리깅 애니메이션 시스템 테스트 (10초)"""
+    print("\n" + "=" * 50)
+    print("TEST 7: 전체 리깅 애니메이션 시스템 (10초)")
+    print("=" * 50)
+    try:
+        print("  → 전체 애니메이션 시스템 시작 (호흡·깜빡임·머리·헤어·감정 레이어)")
+        await ctrl.start_full_animation()
+
+        for emotion in ("happy", "sad", "surprised", "thinking", "calm"):
+            print(f"  → 감정 전환: {emotion}")
+            ctrl.set_emotion_layer(emotion)
+            await asyncio.sleep(1.8)
+
+        print("  → 반응 애니메이션: nod")
+        await ctrl.trigger_reaction("nod")
+        await asyncio.sleep(1.0)
+
+        print("  → 반응 애니메이션: shake")
+        await ctrl.trigger_reaction("shake")
+        await asyncio.sleep(1.0)
+
+        print("  → 반응 애니메이션: chat_superchat")
+        await ctrl.trigger_reaction("chat_superchat")
+        await asyncio.sleep(2.0)
+
+        await ctrl.stop_full_animation()
+        print("[OK] 전체 리깅 애니메이션 테스트 완료")
+    except Exception as e:
+        print(f"[FAIL] 전체 애니메이션 오류: {e}")
+
+
 async def main():
     sample_audio = os.path.join(
         ROOT_DIR, "step2_tts", "output_audio", "sample.mp3"
@@ -132,11 +214,13 @@ async def main():
         print("\n연결 실패 - VTube Studio가 실행 중인지, API가 활성화되어 있는지 확인하세요.")
         return
 
+    await test_load_haru(ctrl)
     await test_model_info(ctrl)
     await test_expressions(ctrl)
     await test_mouth_movement(ctrl)
     await test_idle(ctrl)
     await test_lipsync_file(ctrl, sample_audio)
+    await test_full_animation(ctrl)
 
     await ctrl.disconnect()
     print("\n" + "=" * 50)
