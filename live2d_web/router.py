@@ -1,30 +1,31 @@
 # -*- coding: utf-8 -*-
 """
-live2d_web/router.py - Live2D 웹 뷰어용 FastAPI 라우터
-
-api/main.py에서 include_router로 통합:
-    from live2d_web.router import live2d_router, mount_static
-    app.include_router(live2d_router)
-    mount_static(app)
+live2d_web/router.py - Live2D 웹 뷰어용 FastAPI 라우터 (mao_pro 대응)
 
 엔드포인트:
-    GET  /live2d/          - 뷰어 HTML 반환
+    GET  /live2d/          - 뷰어 HTML 반환 (투명: ?transparent=1)
     WS   /live2d/ws        - 브라우저 ↔ 서버 실시간 채널
     POST /live2d/params    - 파라미터 직접 주입
-    POST /live2d/emotion   - 감정 변경
-    POST /live2d/mouth     - 입 열림 값 설정
-    POST /live2d/reaction  - 반응 애니메이션 트리거
+    POST /live2d/emotion   - 감정 이름 → expression 변환
+    POST /live2d/expression - expression 직접 지정 (이름/인덱스)
+    POST /live2d/motion    - 모션 재생 (group, index)
+    POST /live2d/mouth     - 립싱크 값 설정 (ParamA)
+    POST /live2d/mouth/clear
+    POST /live2d/reaction  - 반응 애니메이션
     POST /live2d/idle/start
     POST /live2d/idle/stop
     GET  /live2d/status    - 연결된 클라이언트 수
+    POST /live2d/chat      - 데스크톱 펫 채팅 (Ollama 연동)
 """
 
 import json
+import os
+import re
 from pathlib import Path
-from typing import Set
+from typing import Set, Union
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -72,21 +73,29 @@ class ParamRequest(BaseModel):
     params: dict
 
 class EmotionRequest(BaseModel):
-    emotion: str       # calm | happy | surprised | thinking
+    emotion: str           # calm | happy | surprised | thinking | angry | sad …
+
+class ExpressionRequest(BaseModel):
+    expression: Union[str, int]   # "exp_01" 또는 0
+
+class MotionRequest(BaseModel):
+    group: str = ""        # "Idle" | "" (기타 모션)
+    index: int = 0
 
 class MouthRequest(BaseModel):
-    value: float       # 0.0 ~ 1.0
+    value: float           # 0.0 ~ 1.0 (ParamA)
 
 class ReactionRequest(BaseModel):
-    name: str          # nod | shake | surprised | superchat
+    name: str              # nod | shake | surprised | superchat
+
+class ChatRequest(BaseModel):
+    message: str
 
 
 # ── 라우트 ───────────────────────────────────────────────────────
 
 @live2d_router.get("/")
 async def viewer():
-    # /live2d/static/ 로 리다이렉트 → 상대 경로(js/, models/, cubism/) 정상 해석
-    from fastapi.responses import RedirectResponse
     return RedirectResponse("/live2d/static/")
 
 
@@ -96,7 +105,6 @@ async def ws_endpoint(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive_text()
-            # 브라우저 → 서버 메시지 (현재는 로깅만)
             print(f"[Live2D WS] {raw[:120]}")
     except WebSocketDisconnect:
         ws_manager.disconnect(ws)
@@ -116,6 +124,18 @@ async def set_params(req: ParamRequest):
 @live2d_router.post("/emotion")
 async def set_emotion(req: EmotionRequest):
     await ws_manager.broadcast({"cmd": "set_emotion", "emotion": req.emotion})
+    return {"ok": True}
+
+
+@live2d_router.post("/expression")
+async def set_expression(req: ExpressionRequest):
+    await ws_manager.broadcast({"cmd": "set_expression", "expression": req.expression})
+    return {"ok": True}
+
+
+@live2d_router.post("/motion")
+async def play_motion(req: MotionRequest):
+    await ws_manager.broadcast({"cmd": "set_motion", "group": req.group, "index": req.index})
     return {"ok": True}
 
 
@@ -149,13 +169,76 @@ async def idle_stop():
     return {"ok": True}
 
 
-# ── 정적 파일 마운트 헬퍼 (main.py에서 호출) ─────────────────────
+# ── 데스크톱 펫 채팅 ─────────────────────────────────────────────
+
+_SYSTEM_PROMPT = (
+    "당신은 차분하고 따뜻한 lofi 음악 버튜버 emeth입니다. "
+    "사용자의 메시지에 짧고 따뜻하게 1~2문장으로 답해주세요. "
+    "존댓말을 사용하고 잔잔한 분위기를 유지해주세요. "
+    "반드시 응답 맨 앞에 '[감정:태그]' 형식으로 감정 태그를 붙여주세요. "
+    "가능한 감정 태그: neutral, calm, happy, joy, sad, fear, angry, surprise, thinking"
+)
+
+_EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
+
+
+@live2d_router.post("/chat")
+async def chat(req: ChatRequest):
+    """데스크톱 펫 채팅 — Ollama emeth 모델로 응답 생성."""
+    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    model_name = os.environ.get("OLLAMA_MODEL", "emeth")
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": req.message},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.7, "num_predict": 100},
+    }
+
+    text = ""
+    error_msg = None
+    try:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(f"{ollama_url}/api/chat", json=payload)
+                resp.raise_for_status()
+                text = resp.json()["message"]["content"].strip()
+        except ImportError:
+            # httpx 미설치 시 requests + threadpool 폴백
+            import asyncio
+            import requests as _req
+            def _sync_call():
+                r = _req.post(f"{ollama_url}/api/chat", json=payload, timeout=30)
+                r.raise_for_status()
+                return r.json()["message"]["content"].strip()
+            text = await asyncio.get_event_loop().run_in_executor(None, _sync_call)
+    except Exception as e:
+        error_msg = str(e)
+        text = "죄송해요, 잠시 후 다시 말씀해주세요."
+
+    # 감정 태그 파싱
+    emotion = "calm"
+    m = _EMOTION_RE.match(text)
+    if m:
+        emotion = m.group(1)
+        text = text[m.end():]
+
+    # 모든 WebSocket 클라이언트에 감정 브로드캐스트
+    await ws_manager.broadcast({"cmd": "set_emotion", "emotion": emotion})
+
+    result: dict = {"reply": text, "emotion": emotion}
+    if error_msg:
+        result["error"] = error_msg
+    return result
+
+
+# ── 정적 파일 마운트 ─────────────────────────────────────────────
 
 def mount_static(app):
-    """app.mount()로 live2d_web/ 정적 파일 서빙 등록.
-
-    html=True: GET /live2d/static/ → index.html 자동 반환
-    """
     app.mount(
         "/live2d/static",
         StaticFiles(directory=str(_STATIC_DIR), html=True),

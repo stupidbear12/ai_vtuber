@@ -1,0 +1,32 @@
+{
+  "name": "mao-pro-desktop-pet",
+  "version": "1.0.0",
+  "description": "mao_pro Live2D 데스크톱 펫",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable",
+    "build:dir": "electron-builder --win dir"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.aivtuber.maopro",
+    "productName": "mao_pro Desktop Pet",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "icon.ico"
+    ]
+  }
+}

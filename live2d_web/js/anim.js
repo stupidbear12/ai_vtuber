@@ -1,27 +1,25 @@
-// anim.js - Live2D 파라미터 애니메이션 시스템
-// animation_controller.py의 레이어 구조를 JavaScript로 포팅
+// anim.js - mao_pro Live2D 파라미터 애니메이션 시스템
 
+// mao_pro 파라미터 ID
 const PARAMS = {
-  ANGLE_X:    'ParamAngleX',      // 고개 좌우 -30~30
-  ANGLE_Y:    'ParamAngleY',      // 고개 상하 -30~30
-  ANGLE_Z:    'ParamAngleZ',      // 고개 기울임 -30~30
-  EYE_L:      'ParamEyeLOpen',    // 왼눈 열림 0~1
-  EYE_R:      'ParamEyeROpen',    // 오른눈 열림 0~1
-  EYE_BALL_X: 'ParamEyeBallX',   // 시선 좌우 -1~1
-  EYE_BALL_Y: 'ParamEyeBallY',   // 시선 상하 -1~1
-  BROW_L:     'ParamBrowLY',      // 왼눈썹 -1~1
-  BROW_R:     'ParamBrowRY',      // 오른눈썹 -1~1
-  MOUTH_OPEN: 'ParamMouthOpenY',  // 입 열림 0~1
-  MOUTH_FORM: 'ParamMouthForm',   // 미소 -1~1
-  BODY_X:     'ParamBodyAngleX',  // 몸 좌우 -10~10
-  BREATH:     'ParamBreath',      // 호흡 0~1
-  TERE:       'ParamTere',        // 볼 붉힘 0~1
+  ANGLE_X:    'ParamAngleX',
+  ANGLE_Y:    'ParamAngleY',
+  ANGLE_Z:    'ParamAngleZ',
+  EYE_L:      'ParamEyeLOpen',
+  EYE_R:      'ParamEyeROpen',
+  EYE_BALL_X: 'ParamEyeBallX',
+  EYE_BALL_Y: 'ParamEyeBallY',
+  BROW_L:     'ParamBrowLY',
+  BROW_R:     'ParamBrowRY',
+  MOUTH_A:    'ParamA',          // 립싱크 (모음 'ㅏ' 개구도)
+  BODY_X:     'ParamBodyAngleX',
+  BREATH:     'ParamBreath',
+  CHEEK:      'ParamCheek',
 };
 
 const PRIORITY = {
   BREATH:   10,
   HEAD:     15,
-  EMOTION:  20,
   TALKING:  25,
   BLINK:    30,
   REACTION: 40,
@@ -30,13 +28,12 @@ const PRIORITY = {
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 function easeInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t; }
-function easeOut(t) { return 1 - (1 - t) * (1 - t); }
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms)     { return new Promise(r => setTimeout(r, ms)); }
 
-// ─── 우선순위 기반 파라미터 레이어 병합 ────────────────────────────
+// ── 우선순위 기반 파라미터 레이어 병합 ───────────────────────────
 class LayeredParamState {
   constructor() {
-    this._layers = new Map(); // id → { values, priority }
+    this._layers = new Map();
   }
 
   set(id, values, priority) {
@@ -56,15 +53,14 @@ class LayeredParamState {
   }
 
   getMerged() {
-    const sorted = [...this._layers.values()]
-      .sort((a, b) => a.priority - b.priority);
+    const sorted = [...this._layers.values()].sort((a, b) => a.priority - b.priority);
     const out = {};
     for (const { values } of sorted) Object.assign(out, values);
     return out;
   }
 }
 
-// ─── 호흡 레이어 ────────────────────────────────────────────────────
+// ── 호흡 레이어 ─────────────────────────────────────────────────
 class BreathLayer {
   constructor(state) {
     this._s = state;
@@ -74,8 +70,7 @@ class BreathLayer {
   }
 
   start() { this._running = true; this._t0 = performance.now() / 1000; }
-
-  stop() { this._running = false; this._s.remove('breath'); }
+  stop()  { this._running = false; this._s.remove('breath'); }
 
   update(now) {
     if (!this._running) return;
@@ -88,26 +83,18 @@ class BreathLayer {
   }
 }
 
-// ─── 자연 눈 깜빡임 레이어 ──────────────────────────────────────────
+// ── 눈 깜빡임 레이어 ────────────────────────────────────────────
 class BlinkLayer {
   constructor(state) {
     this._s = state;
     this._running = false;
-    this._phase = 'wait'; // wait | close | open
+    this._phase = 'wait';
     this._phaseT = 0;
     this._nextBlink = 0;
   }
 
-  start() {
-    this._running = true;
-    this._scheduleNext(performance.now() / 1000);
-  }
-
-  stop() {
-    this._running = false;
-    this._phase = 'wait';
-    this._s.remove('blink');
-  }
+  start() { this._running = true; this._scheduleNext(performance.now() / 1000); }
+  stop()  { this._running = false; this._phase = 'wait'; this._s.remove('blink'); }
 
   _scheduleNext(now) {
     this._nextBlink = now + 3.0 + Math.random() * 3.0;
@@ -116,7 +103,6 @@ class BlinkLayer {
 
   update(now) {
     if (!this._running) return;
-
     if (this._phase === 'wait') {
       if (now >= this._nextBlink) { this._phase = 'close'; this._phaseT = now; }
       return;
@@ -135,7 +121,7 @@ class BlinkLayer {
   }
 }
 
-// ─── 고개 흔들림 레이어 ─────────────────────────────────────────────
+// ── 고개 흔들림 레이어 ──────────────────────────────────────────
 class HeadSwayLayer {
   constructor(state) {
     this._s = state;
@@ -144,8 +130,7 @@ class HeadSwayLayer {
   }
 
   start() { this._running = true; this._t0 = performance.now() / 1000; }
-
-  stop() { this._running = false; this._s.remove('head'); }
+  stop()  { this._running = false; this._s.remove('head'); }
 
   update(now) {
     if (!this._running) return;
@@ -158,67 +143,7 @@ class HeadSwayLayer {
   }
 }
 
-// ─── 감정 레이어 (보간) ─────────────────────────────────────────────
-const EMOTION_PRESETS = {
-  calm: {
-    [PARAMS.EYE_L]: 1.0, [PARAMS.EYE_R]: 1.0,
-    [PARAMS.BROW_L]: 0.0, [PARAMS.BROW_R]: 0.0,
-    [PARAMS.MOUTH_FORM]: 0.1, [PARAMS.TERE]: 0.0,
-  },
-  happy: {
-    [PARAMS.EYE_L]: 0.85, [PARAMS.EYE_R]: 0.85,
-    [PARAMS.BROW_L]: 0.2, [PARAMS.BROW_R]: 0.2,
-    [PARAMS.MOUTH_FORM]: 0.5, [PARAMS.TERE]: 0.3,
-  },
-  surprised: {
-    [PARAMS.EYE_L]: 1.0, [PARAMS.EYE_R]: 1.0,
-    [PARAMS.BROW_L]: 0.5, [PARAMS.BROW_R]: 0.5,
-    [PARAMS.MOUTH_FORM]: -0.1, [PARAMS.TERE]: 0.0,
-  },
-  thinking: {
-    [PARAMS.EYE_L]: 0.7, [PARAMS.EYE_R]: 0.7,
-    [PARAMS.BROW_L]: -0.15, [PARAMS.BROW_R]: 0.25,
-    [PARAMS.MOUTH_FORM]: -0.05, [PARAMS.TERE]: 0.0,
-  },
-};
-
-class EmotionLayer {
-  constructor(state) {
-    this._s = state;
-    this._from = { ...EMOTION_PRESETS.calm };
-    this._to   = { ...EMOTION_PRESETS.calm };
-    this._interpT0 = 0;
-    this._interpDur = 0.5;
-    this._interping = false;
-  }
-
-  setEmotion(name) {
-    const preset = EMOTION_PRESETS[name] ?? EMOTION_PRESETS.calm;
-    this._from = this._current();
-    this._to   = preset;
-    this._interpT0 = performance.now() / 1000;
-    this._interping = true;
-  }
-
-  _current() {
-    return { ...this._from };
-  }
-
-  update(now) {
-    if (!this._interping) {
-      this._s.set('emotion', this._to, PRIORITY.EMOTION);
-      return;
-    }
-    const t = easeInOut(Math.min((now - this._interpT0) / this._interpDur, 1));
-    const allKeys = new Set([...Object.keys(this._from), ...Object.keys(this._to)]);
-    const merged = {};
-    for (const k of allKeys) merged[k] = lerp(this._from[k] ?? 0, this._to[k] ?? 0, t);
-    this._s.set('emotion', merged, PRIORITY.EMOTION);
-    if (t >= 1) { this._from = { ...this._to }; this._interping = false; }
-  }
-}
-
-// ─── 반응 애니메이션 시스템 ─────────────────────────────────────────
+// ── 반응 애니메이션 시스템 ──────────────────────────────────────
 class ReactionSystem {
   constructor(state) {
     this._s = state;
@@ -229,7 +154,6 @@ class ReactionSystem {
     this._cancelFlag.v = true;
     const flag = { v: false };
     this._cancelFlag = flag;
-
     const map = {
       nod:       () => this._nod(flag),
       shake:     () => this._shake(flag),
@@ -285,8 +209,8 @@ class ReactionSystem {
   async _surprised(flag) {
     const L = 'rx_surprised';
     await this._interp(L,
-      { [PARAMS.BROW_L]: 0, [PARAMS.BROW_R]: 0, [PARAMS.MOUTH_OPEN]: 0 },
-      { [PARAMS.BROW_L]: 0.5, [PARAMS.BROW_R]: 0.5, [PARAMS.MOUTH_OPEN]: 0.25 },
+      { [PARAMS.BROW_L]: 0, [PARAMS.BROW_R]: 0, [PARAMS.MOUTH_A]: 0 },
+      { [PARAMS.BROW_L]: 0.5, [PARAMS.BROW_R]: 0.5, [PARAMS.MOUTH_A]: 0.4 },
       0.20, flag);
     if (!flag.v) await sleep(1000);
     if (!flag.v) await this._fadeOut(L, 0.45, flag);
@@ -296,8 +220,8 @@ class ReactionSystem {
   async _superchat(flag) {
     const L = 'rx_superchat';
     await this._interp(L,
-      { [PARAMS.BROW_L]: 0, [PARAMS.BROW_R]: 0, [PARAMS.MOUTH_FORM]: 0, [PARAMS.TERE]: 0 },
-      { [PARAMS.BROW_L]: 0.3, [PARAMS.BROW_R]: 0.3, [PARAMS.MOUTH_FORM]: 0.4, [PARAMS.TERE]: 0.8 },
+      { [PARAMS.BROW_L]: 0, [PARAMS.BROW_R]: 0, [PARAMS.MOUTH_A]: 0, [PARAMS.CHEEK]: 0 },
+      { [PARAMS.BROW_L]: 0.3, [PARAMS.BROW_R]: 0.3, [PARAMS.MOUTH_A]: 0.3, [PARAMS.CHEEK]: 0.8 },
       0.45, flag);
     if (!flag.v) await sleep(1800);
     if (!flag.v) await this._fadeOut(L, 0.5, flag);
@@ -305,14 +229,13 @@ class ReactionSystem {
   }
 }
 
-// ─── 통합 애니메이션 시스템 ─────────────────────────────────────────
+// ── 통합 애니메이션 시스템 ──────────────────────────────────────
 class AnimSystem {
   constructor() {
     this._state    = new LayeredParamState();
     this._breath   = new BreathLayer(this._state);
     this._blink    = new BlinkLayer(this._state);
     this._head     = new HeadSwayLayer(this._state);
-    this._emotion  = new EmotionLayer(this._state);
     this._reaction = new ReactionSystem(this._state);
     this._idleOn   = false;
   }
@@ -332,10 +255,9 @@ class AnimSystem {
     this._state.clear();
   }
 
-  setEmotion(name) { this._emotion.setEmotion(name); }
-
+  // 립싱크: ParamA 직접 주입
   setMouth(value) {
-    this._state.set('lipsync', { [PARAMS.MOUTH_OPEN]: value }, PRIORITY.TALKING);
+    this._state.set('lipsync', { [PARAMS.MOUTH_A]: Math.max(0, Math.min(1, value)) }, PRIORITY.TALKING);
   }
 
   clearMouth() { this._state.remove('lipsync'); }
@@ -344,7 +266,6 @@ class AnimSystem {
 
   triggerReaction(name) { this._reaction.trigger(name); }
 
-  // 60fps 틱마다 호출 - 병합된 파라미터 반환
   tick() {
     const now = performance.now() / 1000;
     if (this._idleOn) {
@@ -352,7 +273,6 @@ class AnimSystem {
       this._blink.update(now);
       this._head.update(now);
     }
-    this._emotion.update(now);
     return this._state.getMerged();
   }
 }

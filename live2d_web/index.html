@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>emeth Live2D Viewer</title>
+  <title>mao_pro Live2D Viewer</title>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -11,7 +11,7 @@
       --bg:      #1a1a2e;
       --panel:   #16213e;
       --card:    #0f3460;
-      --accent:  #7c6af7;
+      --accent:  #e86bce;
       --accent2: #56cfb2;
       --text:    #e0e0e0;
       --muted:   #888;
@@ -27,7 +27,19 @@
       font-size: 13px;
     }
 
-    /* ── 캔버스 영역 ── */
+    /* 투명 모드 (OBS / Electron) */
+    html.transparent, body.transparent {
+      background: transparent;
+      -webkit-app-region: drag;
+    }
+    body.transparent #panel { display: none; }
+    body.chromakey { background: #00FF00 !important; }
+    body.chromakey #canvas-wrap { background: #00FF00 !important; }
+    body.transparent #canvas-wrap { background: transparent !important; }
+    body.transparent #live2d-canvas { background: transparent !important; }
+    body.transparent #live2d-canvas { -webkit-app-region: no-drag; background: transparent; }
+
+    /* 캔버스 영역 */
     #canvas-wrap {
       flex: 1;
       position: relative;
@@ -39,7 +51,7 @@
       height: 100%;
     }
 
-    /* ── 사이드 패널 ── */
+    /* 사이드 패널 */
     #panel {
       width: 270px;
       min-width: 270px;
@@ -67,7 +79,6 @@
       padding: 10px 12px;
     }
 
-    /* 상태 표시 */
     .status-row {
       display: flex;
       align-items: center;
@@ -84,7 +95,6 @@
     .dot.connected { background: var(--accent2); }
     .dot.error     { background: #f76c6c; }
 
-    /* 슬라이더 */
     .slider-row { margin-top: 7px; }
     .slider-label {
       display: flex;
@@ -100,7 +110,6 @@
       cursor: pointer;
     }
 
-    /* 버튼 그룹 */
     .btn-row {
       display: flex;
       flex-wrap: wrap;
@@ -123,7 +132,6 @@
     }
     button.sec:hover { background: #3a3a5a; filter: none; }
 
-    /* 모델 경로 입력 */
     input[type=text] {
       width: 100%;
       background: #1a1a2e;
@@ -136,7 +144,6 @@
       font-family: monospace;
     }
 
-    /* 로그 */
     #log {
       font-family: monospace;
       font-size: 11px;
@@ -170,7 +177,7 @@
 
   <div class="card">
     <h2>모델</h2>
-    <input type="text" id="model-path" placeholder="models/Haru/Haru.model3.json">
+    <input type="text" id="model-path" placeholder="models/mao_pro/runtime/mao_pro.model3.json">
     <div class="btn-row" style="margin-top:6px">
       <button id="btn-load">로드</button>
     </div>
@@ -178,7 +185,6 @@
 
   <div class="card">
     <h2>파라미터 수동 제어</h2>
-
     <div class="slider-row">
       <div class="slider-label"><span>고개 X</span><span id="v-angle-x">0</span></div>
       <input type="range" id="s-angle-x" min="-30" max="30" value="0" step="0.5">
@@ -188,7 +194,7 @@
       <input type="range" id="s-angle-y" min="-30" max="30" value="0" step="0.5">
     </div>
     <div class="slider-row">
-      <div class="slider-label"><span>고개 Z (기울임)</span><span id="v-angle-z">0</span></div>
+      <div class="slider-label"><span>고개 Z</span><span id="v-angle-z">0</span></div>
       <input type="range" id="s-angle-z" min="-30" max="30" value="0" step="0.5">
     </div>
     <div class="slider-row">
@@ -200,12 +206,12 @@
       <input type="range" id="s-eye-r" min="0" max="1" value="1" step="0.01">
     </div>
     <div class="slider-row">
-      <div class="slider-label"><span>입 열림</span><span id="v-mouth">0.00</span></div>
-      <input type="range" id="s-mouth" min="0" max="1" value="0" step="0.01">
+      <div class="slider-label"><span>입 (A)</span><span id="v-mouth-a">0.00</span></div>
+      <input type="range" id="s-mouth-a" min="0" max="1" value="0" step="0.01">
     </div>
     <div class="slider-row">
-      <div class="slider-label"><span>미소</span><span id="v-smile">0.00</span></div>
-      <input type="range" id="s-smile" min="-1" max="1" value="0" step="0.01">
+      <div class="slider-label"><span>볼 붉힘</span><span id="v-cheek">0.00</span></div>
+      <input type="range" id="s-cheek" min="0" max="1" value="0" step="0.01">
     </div>
     <div class="slider-row">
       <div class="slider-label"><span>호흡</span><span id="v-breath">0.00</span></div>
@@ -222,12 +228,33 @@
   </div>
 
   <div class="card">
-    <h2>감정</h2>
+    <h2>표정 (Expression)</h2>
     <div class="btn-row">
-      <button class="sec" data-emotion="calm">차분</button>
-      <button class="sec" data-emotion="happy">기쁨</button>
-      <button class="sec" data-emotion="surprised">놀람</button>
-      <button class="sec" data-emotion="thinking">생각</button>
+      <button class="sec" data-expr="exp_01">exp1 기본</button>
+      <button class="sec" data-expr="exp_02">exp2 미소</button>
+      <button class="sec" data-expr="exp_03">exp3</button>
+      <button class="sec" data-expr="exp_04">exp4 기쁨</button>
+    </div>
+    <div class="btn-row">
+      <button class="sec" data-expr="exp_05">exp5</button>
+      <button class="sec" data-expr="exp_06">exp6</button>
+      <button class="sec" data-expr="exp_07">exp7</button>
+      <button class="sec" data-expr="exp_08">exp8</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>모션 재생</h2>
+    <div class="btn-row">
+      <button class="sec" data-motion-group="Idle" data-motion-index="0">Idle</button>
+      <button class="sec" data-motion-group="" data-motion-index="0">mtn_02</button>
+      <button class="sec" data-motion-group="" data-motion-index="1">mtn_03</button>
+      <button class="sec" data-motion-group="" data-motion-index="2">mtn_04</button>
+    </div>
+    <div class="btn-row">
+      <button class="sec" data-motion-group="" data-motion-index="3">special_01</button>
+      <button class="sec" data-motion-group="" data-motion-index="4">special_02</button>
+      <button class="sec" data-motion-group="" data-motion-index="5">special_03</button>
     </div>
   </div>
 
@@ -248,20 +275,20 @@
 
 </div>
 
-<!-- 1. PixiJS v8 -->
+<!-- PixiJS v8 -->
 <script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
-<!--
-  2. Cubism Core v5 (live2d_web/cubism/ 에 배치)
-     출처: npm @hazart-pkg/live2d-core@1.0.1 (Cubism SDK Core 5.0.0)
--->
+<!-- Cubism Core v5 -->
 <script src="cubism/live2dcubismcore.min.js"></script>
-<!-- 3. pixi-live2d-display (Cubism 5 + PixiJS v8 지원) -->
+<!-- pixi-live2d-display (Cubism5 + PixiJS v8) -->
 <script src="https://cdn.jsdelivr.net/npm/@naari3/pixi-live2d-display@1.2.5/dist/cubism5.min.js"></script>
 
-<!-- 앱 스크립트 -->
 <script src="js/anim.js"></script>
 <script src="js/ws_client.js"></script>
 <script src="js/app.js"></script>
 
 </body>
 </html>
+
+
+
+

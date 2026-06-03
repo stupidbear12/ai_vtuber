@@ -17,3 +17,7 @@ vts_token.json
 *.moc3
 live2d_web/models/**/*.png
 live2d_web/cubism/live2dcubismcore.min.js
+
+# Node.js dependencies
+node_modules/
+electron_pet/node_modules/

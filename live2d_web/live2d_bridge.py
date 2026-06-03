@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-live2d_web/live2d_bridge.py - Python → 웹 Live2D 컨트롤러
+live2d_web/live2d_bridge.py - Python → 웹 Live2D 컨트롤러 (mao_pro 대응)
 
-기존 VTubeController / AnimationController와 동일한 인터페이스를 제공합니다.
+VTubeController / AnimationController와 동일한 인터페이스를 제공합니다.
 REST API를 통해 브라우저의 Live2D 모델 파라미터를 제어합니다.
 
 사용 예:
     ctrl = Live2DWebController()
     await ctrl.start_idle()
-    await ctrl.set_emotion("happy")
-    await ctrl.lipsync(frames)   # analyze_audio() 결과 그대로 사용
-    await ctrl.trigger_reaction("nod")
+    await ctrl.set_expression("exp_01")       # 표정 직접 지정
+    await ctrl.set_emotion("happy")           # 감정 이름 → 표정 자동 변환
+    await ctrl.play_motion("Idle", 0)         # 모션 재생
+    await ctrl.lipsync(frames)
     await ctrl.close()
 """
 
 import asyncio
-from typing import Optional
+from typing import Optional, Union
 
 try:
     import aiohttp
@@ -26,9 +27,7 @@ except ImportError:
 class Live2DWebController:
     """
     웹 브라우저에서 실행 중인 Live2D 모델을 HTTP REST로 제어.
-
     api/main.py 서버(기본 http://localhost:8000)에 연결합니다.
-    브라우저가 /live2d/ws WebSocket에 접속 중이어야 명령이 전달됩니다.
     """
 
     def __init__(self, base_url: str = "http://localhost:8000"):
@@ -51,18 +50,25 @@ class Live2DWebController:
     # ── 공개 API ─────────────────────────────────────────────────
 
     async def set_params(self, params: dict) -> dict:
-        """
-        파라미터 직접 설정.
-        params 예: {"ParamAngleX": 15.0, "ParamEyeLOpen": 0.8}
-        """
+        """파라미터 직접 설정. e.g. {"ParamAngleX": 15.0}"""
         return await self._post("/live2d/params", {"params": params})
 
     async def set_emotion(self, emotion: str) -> dict:
-        """감정 전환 (calm / happy / surprised / thinking)."""
+        """감정 이름 → expression 자동 변환.
+        지원: neutral, calm, happy, joy, sad, fear, angry, surprise, thinking
+        """
         return await self._post("/live2d/emotion", {"emotion": emotion})
 
+    async def set_expression(self, expression: Union[str, int]) -> dict:
+        """expression 직접 지정. 이름("exp_01") 또는 0-based 인덱스(0) 모두 가능."""
+        return await self._post("/live2d/expression", {"expression": expression})
+
+    async def play_motion(self, group: str = "", index: int = 0) -> dict:
+        """모션 재생. group="Idle" → Idle 모션, group="" → 기타 모션."""
+        return await self._post("/live2d/motion", {"group": group, "index": index})
+
     async def set_mouth(self, value: float) -> dict:
-        """입 열림 값 설정 (0.0 ~ 1.0)."""
+        """립싱크 값 설정 (0.0 ~ 1.0, ParamA 사용)."""
         return await self._post("/live2d/mouth", {"value": value})
 
     async def clear_mouth(self) -> dict:
@@ -90,15 +96,11 @@ class Live2DWebController:
     async def lipsync(self, frames: list) -> None:
         """
         립싱크 재생.
-
-        frames 포맷은 step3_vtube/lipsync.py > analyze_audio() 반환값과 동일:
-            [(timestamp_ms: float, mouth_value: float), ...]
-
-        타임스탬프에 맞춰 mouth 파라미터를 전송하고 종료 시 입을 닫습니다.
+        frames 포맷: [(timestamp_ms: float, mouth_value: float), ...]
+        step3_vtube/lipsync.py > analyze_audio() 반환값과 호환.
         """
         if not frames:
             return
-
         loop = asyncio.get_event_loop()
         start = loop.time()
         try:
@@ -123,11 +125,10 @@ class Live2DWebController:
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'step3_vtube'))
             from lipsync import analyze_audio
         except ImportError:
-            print("[Live2DBridge] lipsync 모듈 없음 — analyze_audio를 import할 수 없습니다")
+            print("[Live2DBridge] lipsync 모듈 없음")
             return
 
         await self.set_emotion(emotion)
-
         loop = asyncio.get_event_loop()
         frames = await loop.run_in_executor(None, analyze_audio, audio_path)
         await self.lipsync(frames)

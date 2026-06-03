@@ -139,6 +139,48 @@ class VTubeController:
         )
         return resp.get("data", {}).get("parameters", [])
 
+    async def hide_b_arms(self) -> bool:
+        """
+        Haru 모델의 B세트 팔(Part01ArmRB001, Part01ArmLB001)을 숨깁니다.
+
+        VTube Studio가 pose3.json Pose 시스템을 실행하지 않아
+        A/B 두 세트 팔이 동시에 렌더링되는 문제를 임시 수정합니다.
+        모델 리로드 시 재호출이 필요합니다.
+
+        Returns True if at least one artmesh was hidden.
+        """
+        self._check()
+        B_ARM_KEYWORDS = ["ArmRB", "ArmLB"]
+        try:
+            resp = await self.vts.request(
+                self.vts.vts_request.BaseRequest("ArtMeshListRequest")
+            )
+            all_meshes = resp.get("data", {}).get("artMeshNames", [])
+            b_arm_meshes = [m for m in all_meshes
+                            if any(kw in m for kw in B_ARM_KEYWORDS)]
+
+            if not b_arm_meshes:
+                print("[VTube] hide_b_arms: B arm artmesh 없음 (모델이 Haru가 아닐 수 있음)")
+                return False
+
+            await self.vts.request(
+                self.vts.vts_request.BaseRequest("ColorTintRequest", {
+                    "colorTint": {
+                        "colorR": 255, "colorG": 255, "colorB": 255,
+                        "colorA": 0, "mixWithSceneLightingColor": 1.0,
+                    },
+                    "artMeshMatcher": {
+                        "tintAll": False, "artMeshNumber": [],
+                        "nameExact": b_arm_meshes, "nameContains": [],
+                    },
+                })
+            )
+            print(f"[VTube] B arm 숨김 완료: {b_arm_meshes}")
+            return True
+        except Exception as e:
+            print(f"[VTube] hide_b_arms 실패: {e}")
+            return False
+
     # ── 표정 제어 ──────────────────────────────────────────
 
     async def set_expression(self, name: str):
