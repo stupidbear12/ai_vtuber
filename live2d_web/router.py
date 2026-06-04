@@ -82,6 +82,11 @@ class MotionRequest(BaseModel):
     group: str = ""        # "Idle" | "" (기타 모션)
     index: int = 0
 
+class PlayOnceRequest(BaseModel):
+    group: str = "Idle"
+    index: int = 0
+    duration: int = 5330   # ms 후 idle 복귀
+
 class MouthRequest(BaseModel):
     value: float           # 0.0 ~ 1.0 (ParamA)
 
@@ -135,7 +140,20 @@ async def set_expression(req: ExpressionRequest):
 
 @live2d_router.post("/motion")
 async def play_motion(req: MotionRequest):
-    await ws_manager.broadcast({"cmd": "set_motion", "group": req.group, "index": req.index})
+    """모션 재생 후 idle 자동 복귀. 클라이언트가 Promise 완료 또는 duration ms 후 startIdle()."""
+    await ws_manager.broadcast({"cmd": "play_motion", "group": req.group, "index": req.index})
+    return {"ok": True}
+
+
+@live2d_router.post("/motion/play_once")
+async def play_motion_once(req: PlayOnceRequest):
+    """모션 한 번 재생 후 idle 복귀. 클라이언트 측에서 duration ms 후 startIdle()."""
+    await ws_manager.broadcast({
+        "cmd": "play_motion_once",
+        "group": req.group,
+        "index": req.index,
+        "duration": req.duration,
+    })
     return {"ok": True}
 
 

@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen } = require('electron');
 const path = require('path');
 const http = require('http');
 
@@ -10,13 +10,16 @@ let mouseThroughEnabled = false;
 // ── Window ────────────────────────────────────────────────────
 
 function createWindow() {
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
+  const winW = 400, winH = 600;
   win = new BrowserWindow({
-    width: 400,
-    height: 600,
-    x: 100,
-    y: 80,
+    width: winW,
+    height: winH,
+    x: sw - winW,
+    y: sh - winH,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
@@ -122,6 +125,9 @@ ipcMain.on('chat-message', (_, msg) => {
 });
 
 // ── App lifecycle ─────────────────────────────────────────────
+
+// Windows에서 WebGL 투명 창 합성 문제 해결: 소프트웨어 GPU 합성 강제
+app.commandLine.appendSwitch('disable-gpu-compositing');
 
 app.whenReady().then(() => {
   createWindow();

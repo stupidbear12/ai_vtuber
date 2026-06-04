@@ -153,16 +153,16 @@
 
 <script>
 // ── 설정 ──────────────────────────────────────────────────────
-const MODEL_URL = 'http://localhost:8000/live2d/static/models/mao_pro/runtime/mao_pro.model3.json';
+const MODEL_URL = 'http://localhost:8000/live2d/static/models/Haru/Haru.model3.json';
 const WS_URL    = 'ws://localhost:8000/live2d/ws';
 
 const EMOTION_MAP = {
-  neutral: 'exp_01', calm: 'exp_01', default: 'exp_01',
-  happy:   'exp_04', joy:  'exp_04',
-  sad:     'exp_02', fear: 'exp_02',
-  angry:   'exp_03',
-  surprise: 'exp_04', surprised: 'exp_04',
-  thinking: 'exp_05',
+  neutral: 'F01', calm: 'F01', default: 'F01',
+  happy:   'F04', joy:  'F04',
+  sad:     'F02', fear: 'F02',
+  angry:   'F03',
+  surprise: 'F05', surprised: 'F05',
+  thinking: 'F06',
 };
 
 // ── DOM ───────────────────────────────────────────────────────
@@ -184,31 +184,34 @@ let waiting  = false;
 
 // ── Live2D 초기화 ─────────────────────────────────────────────
 async function initLive2D() {
-  // WebGL context를 투명(alpha:true)으로 미리 생성 — PixiJS가 재사용
-  $cv.getContext('webgl2', { alpha: true, premultipliedAlpha: false, antialias: true }) ||
-  $cv.getContext('webgl',  { alpha: true, premultipliedAlpha: false, antialias: true });
-
   pixiApp = new PIXI.Application();
   await pixiApp.init({
     canvas:          $cv,
     width:           window.innerWidth,
     height:          window.innerHeight,
-    backgroundAlpha: 0,         // 완전 투명
+    backgroundAlpha: 0,
     antialias:       true,
     autoDensity:     true,
     resolution:      window.devicePixelRatio || 1,
   });
-  $cv.style.cssText += ';background:transparent!important;';
 
   animSys = new AnimSystem();
 
-  l2dModel = await PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: true });
+  l2dModel = await PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false });
   pixiApp.stage.addChild(l2dModel);
   l2dModel.setRenderer(pixiApp.renderer);
   positionModel();
 
   // pixi-live2d-display 내부 모션 중지 — AnimSystem이 파라미터를 직접 제어
   l2dModel.internalModel.motionManager.stopAllMotions?.();
+
+  // Cubism SDK가 마스크 렌더링 후 gl.clearColor(1,1,1,1)을 복원하지 않아
+  // 다음 프레임에서 PixiJS가 흰 배경으로 캔버스를 지우는 버그 수정:
+  // 매 프레임 렌더링 직전(HIGH 우선순위)에 clearColor를 투명으로 리셋
+  pixiApp.ticker.add(() => {
+    const gl = pixiApp.renderer?.gl;
+    if (gl) gl.clearColor(0, 0, 0, 0);
+  }, null, PIXI.UPDATE_PRIORITY.HIGH);
 
   // 틱마다 AnimSystem 파라미터를 Cubism Core에 주입
   pixiApp.ticker.add(() => {
@@ -237,8 +240,8 @@ function positionModel() {
   l2dModel.scale.set(scale);
   l2dModel.anchor.set(0, 0);
   l2dModel.pivot.set(0, 0);
-  l2dModel.x = dpr * (sw / 2 - (mw * scale) / 2);
-  l2dModel.y = dpr * (sh - mh * scale);
+  l2dModel.x = sw / 2 - (mw * scale) / 2;
+  l2dModel.y = sh - mh * scale;
 }
 
 // ── WebSocket (Live2D 제어 채널) ──────────────────────────────
@@ -282,6 +285,30 @@ function handleCmd(msg) {
     case 'idle_stop':
       animSys.stopIdle();
       break;
+    case 'play_motion_once':
+      animSys.stopIdle();
+      l2dModel.motion(msg.group ?? 'Idle', msg.index ?? 0);
+      setTimeout(() => {
+        l2dModel.internalModel.motionManager.stopAllMotions?.();
+        animSys.startIdle();
+      }, msg.duration ?? 5330);
+      break;
+    case 'play_motion': {
+      animSys.stopIdle();
+      const _dur = msg.duration ?? 5500;
+      let _restored = false;
+      const _restore = () => {
+        if (_restored) return;
+        _restored = true;
+        l2dModel.internalModel.motionManager.stopAllMotions?.();
+        animSys.startIdle();
+      };
+      const _timer = setTimeout(_restore, _dur);
+      l2dModel.motion(msg.group ?? 'Idle', msg.index ?? 0)
+        .then(() => { clearTimeout(_timer); _restore(); })
+        .catch(() => { clearTimeout(_timer); _restore(); });
+      break;
+    }
   }
 }
 
