@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -43,16 +43,8 @@ pipeline_status = {
     "updated_at": None,
 }
 
-# 채팅 파이프라인 인스턴스 및 상태
-_chat_pipeline = None
-_chat_task: Optional[asyncio.Task] = None
-chat_status = {
-    "running": False,
-    "video_id": None,
-    "live_chat_id": None,
-    "started_at": None,
-    "stats": {"received": 0, "responded": 0, "skipped": 0, "errors": 0},
-}
+# 방송 채팅 매니저 싱글턴
+_broadcast_chat_manager = None
 
 # OBS 컨트롤러 싱글턴
 _obs_controller = None
@@ -115,15 +107,34 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# chat_collector 임포트 (api/ 디렉토리를 sys.path에 추가)
+_API_DIR = os.path.dirname(os.path.abspath(__file__))
+if _API_DIR not in sys.path:
+    sys.path.insert(0, _API_DIR)
+
+try:
+    from chat_collector import BroadcastChatManager
+    print("[API] chat_collector 모듈 등록 완료")
+except Exception as _e:
+    print(f"[API] chat_collector 모듈 로드 실패: {_e}")
+    BroadcastChatManager = None  # type: ignore
+
 # Live2D 웹 뷰어 라우터 통합
+_ws_manager = None
 try:
     sys.path.insert(0, ROOT_DIR)
-    from live2d_web.router import live2d_router, mount_static as _live2d_mount
+    from live2d_web.router import live2d_router, mount_static as _live2d_mount, ws_manager as _ws_manager
     app.include_router(live2d_router)
     _live2d_mount(app)
     print("[API] Live2D 웹 뷰어 라우터 등록 완료 → GET /live2d/")
 except Exception as _e:
     print(f"[API] Live2D 웹 뷰어 라우터 등록 건너뜀: {_e}")
+
+
+async def _safe_broadcast(msg: dict) -> None:
+    """ws_manager가 없을 때도 안전하게 브로드캐스트."""
+    if _ws_manager is not None:
+        await _ws_manager.broadcast(msg)
 
 
 # ------------------------------------------------------------------ 요청 모델
@@ -153,7 +164,8 @@ class VTubeControlRequest(BaseModel):
     idle_duration: Optional[float] = None
 
 class ChatStartRequest(BaseModel):
-    video_id: str
+    platform: str    # "youtube" | "chzzk"
+    channel_id: str  # 유튜브: 영상 ID, 치지직: 채널 해시 ID
 
 class SwitchSceneRequest(BaseModel):
     scene_name: str
@@ -658,71 +670,71 @@ async def run_pipeline_endpoint(request: PipelineRequest):
         raise HTTPException(status_code=500, detail=f"파이프라인 실패: {str(e)}")
 
 
-# ------------------------------------------------------------------ 채팅 시스템
+# ------------------------------------------------------------------ 방송 채팅 시스템
 @app.post("/chat/start")
-async def chat_start(request: ChatStartRequest, background_tasks: BackgroundTasks):
-    global _chat_pipeline, _chat_task
-    if chat_status["running"]:
+async def chat_start(request: ChatStartRequest):
+    """
+    방송 채팅 수집을 시작합니다.
+
+    - platform: "youtube" 또는 "chzzk"
+    - channel_id: 유튜브 영상 ID 또는 치지직 채널 해시 ID
+    """
+    global _broadcast_chat_manager
+
+    if BroadcastChatManager is None:
+        raise HTTPException(status_code=500, detail="chat_collector 모듈을 로드할 수 없습니다.")
+
+    if _broadcast_chat_manager and _broadcast_chat_manager.is_running:
         raise HTTPException(status_code=400, detail="채팅 시스템이 이미 실행 중입니다.")
-    if not request.video_id.strip():
-        raise HTTPException(status_code=400, detail="video_id가 비어있습니다.")
+
+    if not request.channel_id.strip():
+        raise HTTPException(status_code=400, detail="channel_id가 비어있습니다.")
+
+    _broadcast_chat_manager = BroadcastChatManager(broadcast_fn=_safe_broadcast)
+
     try:
-        from chat_pipeline import ChatPipeline
-    except ImportError as e:
-        raise HTTPException(status_code=500, detail=f"step6_chat 모듈 없음: {e}")
-    _chat_pipeline = ChatPipeline()
-    chat_status.update({
-        "running": True,
-        "video_id": request.video_id,
-        "live_chat_id": None,
-        "started_at": datetime.now().isoformat(),
-        "stats": {"received": 0, "responded": 0, "skipped": 0, "errors": 0},
-    })
-    async def _run_chat():
-        global _chat_task
-        try:
-            await _chat_pipeline.start(request.video_id)
-        except Exception as e:
-            chat_status["running"] = False
-            chat_status["error"] = str(e)
-        finally:
-            chat_status["running"] = False
-    _chat_task = asyncio.create_task(_run_chat())
+        await _broadcast_chat_manager.start(request.platform, request.channel_id)
+    except (ValueError, RuntimeError) as e:
+        _broadcast_chat_manager = None
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        _broadcast_chat_manager = None
+        raise HTTPException(status_code=500, detail=f"채팅 시스템 시작 실패: {e}")
+
     return {
         "success": True,
-        "message": f"채팅 시스템이 시작되었습니다. (video_id: {request.video_id})",
-        "video_id": request.video_id,
+        "message": f"채팅 수집이 시작되었습니다.",
+        "platform": request.platform,
+        "channel_id": request.channel_id,
+        "started_at": datetime.now().isoformat(),
     }
 
 
 @app.post("/chat/stop")
 async def chat_stop():
-    global _chat_pipeline, _chat_task
-    if not chat_status["running"]:
+    global _broadcast_chat_manager
+
+    if _broadcast_chat_manager is None or not _broadcast_chat_manager.is_running:
         return {"success": True, "message": "채팅 시스템이 이미 정지 상태입니다."}
-    if _chat_pipeline:
-        _chat_pipeline.stop()
-    if _chat_task and not _chat_task.done():
-        _chat_task.cancel()
-        try:
-            await asyncio.wait_for(_chat_task, timeout=5.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
-    chat_status["running"] = False
+
+    try:
+        final_stats = await _broadcast_chat_manager.stop()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"채팅 시스템 정지 실패: {e}")
+
+    _broadcast_chat_manager = None
     return {
         "success": True,
         "message": "채팅 시스템이 정지되었습니다.",
-        "stats": _chat_pipeline.stats if _chat_pipeline else {},
+        "stats": final_stats,
     }
 
 
 @app.get("/chat/status")
 async def chat_status_endpoint():
-    status = dict(chat_status)
-    if _chat_pipeline and chat_status["running"]:
-        status["stats"] = _chat_pipeline.stats
-        status["live_chat_id"] = _chat_pipeline._live_chat_id
-    return JSONResponse(content=status)
+    if _broadcast_chat_manager is None:
+        return JSONResponse(content={"running": False, "platform": None, "channel_id": None})
+    return JSONResponse(content=_broadcast_chat_manager.get_status())
 
 
 # ================================================================
