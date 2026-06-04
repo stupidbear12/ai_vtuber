@@ -1,0 +1,124 @@
+# AI 버튜버 에메스(emeth) — 전체 모듈 Docker Compose 설정
+#
+# 실행 방법:
+#   cp .env.example .env   # .env에 API 키 입력
+#   docker-compose up -d   # 전체 서비스 백그라운드 실행
+#   docker-compose logs -f # 로그 스트리밍
+#
+# 포트 구성:
+#   8000 — ai_vtuber_core  (오케스트레이터, 메인 API)
+#   8001 — ai_live2d        (Live2D 아바타 서버)
+#   8002 — ai_chat          (Gemini 채팅 엔진)
+#   8003 — ai_broadcast     (방송 채팅 수집)
+#   8004 — ai_voice         (음성 합성, 스텁)
+
+services:
+
+  # ── Live2D 아바타 서버 ─────────────────────────────────────────
+  ai_live2d:
+    build:
+      context: modules/live2d
+      dockerfile: Dockerfile
+    container_name: ai_live2d
+    ports:
+      - "8001:8001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── 에메스 채팅 엔진 ───────────────────────────────────────────
+  ai_chat:
+    build:
+      context: modules/chat
+      dockerfile: Dockerfile
+    container_name: ai_chat
+    ports:
+      - "8002:8002"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── 방송 채팅 수집 서버 ────────────────────────────────────────
+  ai_broadcast:
+    build:
+      context: modules/broadcast
+      dockerfile: Dockerfile
+    container_name: ai_broadcast
+    ports:
+      - "8003:8003"
+    environment:
+      # 같은 Docker 네트워크 내에서 서비스명으로 접근
+      - AI_CHAT_URL=http://ai_chat:8002
+      - AI_LIVE2D_URL=http://ai_live2d:8001
+    depends_on:
+      - ai_chat
+      - ai_live2d
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── 음성 합성 서버 (스텁) ──────────────────────────────────────
+  ai_voice:
+    build:
+      context: modules/voice
+      dockerfile: Dockerfile
+    container_name: ai_voice
+    ports:
+      - "8004:8004"
+    environment:
+      # ElevenLabs 연동 시 아래 주석 해제
+      # - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      # - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID}
+      - PLACEHOLDER=stub
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── 오케스트레이터 (메인 API) ──────────────────────────────────
+  ai_vtuber_core:
+    build:
+      context: modules/core
+      dockerfile: Dockerfile
+    container_name: ai_vtuber_core
+    ports:
+      - "8000:8000"
+    environment:
+      # Docker 네트워크 내 서비스명으로 각 모듈에 접근
+      - AI_LIVE2D_URL=http://ai_live2d:8001
+      - AI_CHAT_URL=http://ai_chat:8002
+      - AI_BROADCAST_URL=http://ai_broadcast:8003
+      - AI_VOICE_URL=http://ai_voice:8004
+    depends_on:
+      - ai_live2d
+      - ai_chat
+      - ai_broadcast
+      - ai_voice
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# 모든 서비스가 공유하는 내부 네트워크 (외부 노출 없음)
+networks:
+  default:
+    name: ai_vtuber_network

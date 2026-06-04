@@ -1,23 +1,27 @@
-# ──────────────────────────────────────────────────────────────
-# Lofi Diffusion — PyTorch 의존성
-# CUDA 12.4 설치:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-# CPU 전용:
-#   pip install torch torchvision
-# ──────────────────────────────────────────────────────────────
+# AI 버튜버 에메스(emeth) — 전체 모듈 통합 의존성
+# 개별 모듈은 modules/{name}/requirements.txt 참조
+# 이 파일은 모든 모듈 의존성을 한 번에 설치할 때 사용합니다:
+#   pip install -r requirements.txt
 
-torch>=2.0.0
-torchvision>=0.15.0
+# ── 공통 (전 모듈) ─────────────────────────────────────────────
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-dotenv>=1.0.0
 
-# 오디오 처리
-librosa>=0.10.0
-soundfile>=0.12.0
+# ── ai_chat, ai_live2d — Gemini API ────────────────────────────
+google-generativeai>=0.8.0
 
-# 수치 연산
-numpy>=1.24.0
+# ── ai_vtuber_core, ai_broadcast — HTTP 클라이언트 ─────────────
+aiohttp>=3.9.0
 
-# 시각화
-matplotlib>=3.7.0
+# ── ai_live2d — 정적 파일 서빙 ─────────────────────────────────
+python-multipart>=0.0.6
+aiofiles>=23.1.0
+websockets>=11.0
 
-# 진행바
-tqdm>=4.65.0
+# ── ai_broadcast — 유튜브/치지직 채팅 수집 ─────────────────────
+pytchat>=0.5.5
+# websockets 이미 위에 포함
+
+# ── ai_voice — ElevenLabs (구현 예정, 필요 시 주석 해제) ────────
+# elevenlabs>=1.0.0
