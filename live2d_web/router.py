@@ -15,7 +15,7 @@ live2d_web/router.py - Live2D 웹 뷰어용 FastAPI 라우터 (mao_pro 대응)
     POST /live2d/idle/start
     POST /live2d/idle/stop
     GET  /live2d/status    - 연결된 클라이언트 수
-    POST /live2d/chat      - 데스크톱 펫 채팅 (Ollama 연동)
+    POST /live2d/chat      - 데스크톱 펫 채팅 (Google Gemini API 연동)
 """
 
 import json
@@ -23,6 +23,12 @@ import os
 import re
 from pathlib import Path
 from typing import Set, Union
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse
@@ -202,38 +208,25 @@ _EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
 
 @live2d_router.post("/chat")
 async def chat(req: ChatRequest):
-    """데스크톱 펫 채팅 — Ollama emeth 모델로 응답 생성."""
-    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-    model_name = os.environ.get("OLLAMA_MODEL", "emeth")
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": req.message},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.7, "num_predict": 100},
-    }
+    """데스크톱 펫 채팅 — Google Gemini API로 응답 생성."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
     text = ""
     error_msg = None
     try:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(f"{ollama_url}/api/chat", json=payload)
-                resp.raise_for_status()
-                text = resp.json()["message"]["content"].strip()
-        except ImportError:
-            # httpx 미설치 시 requests + threadpool 폴백
-            import asyncio
-            import requests as _req
-            def _sync_call():
-                r = _req.post(f"{ollama_url}/api/chat", json=payload, timeout=30)
-                r.raise_for_status()
-                return r.json()["message"]["content"].strip()
-            text = await asyncio.get_event_loop().run_in_executor(None, _sync_call)
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=_SYSTEM_PROMPT,
+            generation_config={"temperature": 0.7, "max_output_tokens": 200},
+        )
+        response = await model.generate_content_async(req.message)
+        text = response.text.strip()
     except Exception as e:
         error_msg = str(e)
         text = "죄송해요, 잠시 후 다시 말씀해주세요."
