@@ -23,5 +23,5 @@ websockets>=11.0
 pytchat>=0.5.5
 # websockets 이미 위에 포함
 
-# ── ai_voice — ElevenLabs (구현 예정, 필요 시 주석 해제) ────────
-# elevenlabs>=1.0.0
+# ── ai_voice — ElevenLabs TTS ──────────────────────────────────
+elevenlabs>=1.0.0

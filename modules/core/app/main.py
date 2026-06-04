@@ -70,8 +70,9 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     """통합 채팅 파이프라인 요청 모델."""
-    message: str                        # 사용자 채팅 입력
-    mode: Optional[str] = "pet"         # "pet" 또는 "broadcast"
+    message: str                           # 사용자 채팅 입력
+    mode: Optional[str] = "pet"            # "pet" 또는 "broadcast"
+    with_voice: Optional[bool] = False     # True면 TTS 변환 포함 (audio_base64 반환)
 
 class BroadcastStartRequest(BaseModel):
     """방송 채팅 수집 시작 요청 모델."""
@@ -148,16 +149,18 @@ async def pipeline_chat(req: ChatRequest):
     흐름:
       1. ai_chat 모듈로 에메스 응답 생성
       2. ai_live2d 모듈로 표정 변경
-      3. (예정) ai_voice 모듈로 음성 합성
+      3. (선택) ai_voice 모듈로 TTS 변환 — with_voice=True 시 실행
 
     Args:
         req.message: 사용자 채팅 입력
         req.mode: "pet" (기본) 또는 "broadcast"
+        req.with_voice: True면 TTS 음성 변환 포함 (audio_base64 필드 반환)
 
     Returns:
         reply: 에메스 응답 텍스트
         emotion: 감정 태그
         live2d_updated: 표정 변경 성공 여부
+        audio_base64: base64 인코딩된 MP3 (with_voice=True 시, 실패하면 null)
     """
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message가 비어있습니다.")
@@ -169,7 +172,7 @@ async def pipeline_chat(req: ChatRequest):
             detail="mode는 'pet' 또는 'broadcast'만 허용됩니다."
         )
 
-    result = await run_chat_pipeline(req.message, mode=mode)
+    result = await run_chat_pipeline(req.message, mode=mode, with_voice=bool(req.with_voice))
 
     if "error" in result:
         raise HTTPException(status_code=503, detail=result["error"])

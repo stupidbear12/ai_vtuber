@@ -5,7 +5,7 @@ app/orchestrator.py — ai_vtuber_core 모듈 간 연동 오케스트레이터
 역할:
   - 각 모듈(ai_live2d, ai_chat, ai_broadcast, ai_voice) 상태 조회
   - 모듈 URL 환경변수 관리 및 기본값 제공
-  - 통합 채팅 파이프라인 실행 (chat → live2d emotion)
+  - 통합 채팅 파이프라인 실행 (chat → live2d emotion → voice TTS)
   - 방송 채팅 시작/중지 위임 (→ ai_broadcast)
 
 모듈 포트 기본값:
@@ -110,23 +110,29 @@ async def check_all_modules() -> dict:
     return {"modules": modules, "all_online": all_online}
 
 
-async def run_chat_pipeline(message: str, mode: str = "pet") -> dict:
+async def run_chat_pipeline(
+    message: str,
+    mode: str = "pet",
+    with_voice: bool = False,
+) -> dict:
     """통합 채팅 파이프라인 실행.
 
     흐름:
       1. ai_chat POST /chat → {reply, emotion} 수신
       2. ai_live2d POST /live2d/emotion → 표정 변경
-      3. 결과 반환
+      3. (선택) ai_voice POST /voice/tts → MP3 음성 생성 후 base64 반환
 
     Args:
         message: 사용자 채팅 입력
         mode: "pet" (기본값) 또는 "broadcast"
+        with_voice: True면 Step 3 TTS 변환을 추가 실행 (기본 False)
 
     Returns:
         {
             "reply": str,
             "emotion": str,
-            "live2d_updated": bool  # 표정 변경 성공 여부
+            "live2d_updated": bool,   # 표정 변경 성공 여부
+            "audio_base64": str|None  # MP3 base64 (with_voice=True 시만 포함)
         }
     """
     cfg = ModuleConfig()
@@ -151,7 +157,13 @@ async def run_chat_pipeline(message: str, mode: str = "pet") -> dict:
     except Exception as e:
         chat_error = str(e)
         logger.error(f"[Orchestrator] ai_chat 호출 실패: {e}")
-        return {"reply": "채팅 엔진에 연결할 수 없습니다.", "emotion": "worried", "live2d_updated": False, "error": chat_error}
+        return {
+            "reply": "채팅 엔진에 연결할 수 없습니다.",
+            "emotion": "worried",
+            "live2d_updated": False,
+            "audio_base64": None,
+            "error": chat_error,
+        }
 
     # ── Step 2: ai_live2d 표정 변경 ──────────────────────────────
     live2d_updated = False
@@ -166,10 +178,30 @@ async def run_chat_pipeline(message: str, mode: str = "pet") -> dict:
     except Exception as e:
         logger.warning(f"[Orchestrator] ai_live2d 표정 변경 실패 (무시): {e}")
 
+    # ── Step 3: ai_voice TTS 변환 (선택적) ───────────────────────
+    # with_voice=True 일 때만 실행. 실패해도 채팅 응답은 정상 반환.
+    # 오디오는 base64 인코딩된 MP3로 반환 (짧은 응답 기준 ~100~200KB).
+    audio_base64: Optional[str] = None
+    if with_voice and reply:
+        try:
+            import base64
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{cfg.voice_url()}/voice/tts",
+                    json={"text": reply, "emotion": emotion},
+                    timeout=aiohttp.ClientTimeout(total=30.0),
+                ) as resp:
+                    if resp.status == 200:
+                        audio_bytes = await resp.read()
+                        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+        except Exception as e:
+            logger.warning(f"[Orchestrator] ai_voice TTS 변환 실패 (무시): {e}")
+
     return {
         "reply": reply,
         "emotion": emotion,
         "live2d_updated": live2d_updated,
+        "audio_base64": audio_base64,  # None이면 TTS 미사용 또는 실패
     }
 
 

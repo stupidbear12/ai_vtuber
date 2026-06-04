@@ -1,5 +1,4 @@
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 python-dotenv>=1.0.0
-# ElevenLabs 연동 시 아래 주석 해제:
-# elevenlabs>=1.0.0
+elevenlabs>=1.0.0
