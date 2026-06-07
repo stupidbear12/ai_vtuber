@@ -43,7 +43,7 @@ services:
       - "8002:8002"
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-emeth}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

@@ -57,11 +57,31 @@ ai_vtuber/
 
 ## 빠른 시작 (Docker Compose)
 
-### 1. 환경변수 설정
+### 1. 환경변수 + Ollama
 
 ```bash
 cp .env.example .env
-# 호스트에서 ollama serve 실행 (API 키 불필요)
+```
+
+**Ollama (로컬 LLM, 무료):**
+1. https://ollama.com 에서 설치
+2. Windows **시작 메뉴 → Ollama** 실행 (트레이에 아이콘 표시)
+3. cmd에서 `ollama` 명령이 안 될 때:
+
+```cmd
+check-ollama.bat
+```
+
+또는 전체 경로:
+
+```cmd
+"%LOCALAPPDATA%\Programs\Ollama\ollama.exe" list
+```
+
+`.env`에 설치된 모델명 지정 (`ollama list`로 확인):
+
+```
+OLLAMA_MODEL=emeth
 ```
 
 ### 2. 전체 실행
@@ -114,14 +134,101 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ---
 
-## Electron 데스크톱 펫 실행
+## 한번에 실행
+
+### cmd (명령 프롬프트) — 추천
+
+```cmd
+cd C:\Users\thtgg\workspace2\ai_vtuber
+start-all.bat
+stop-all.bat
+start-pet.bat
+```
+
+> **주의:** cmd에서 `.\start-all.ps1`을 입력하면 **메모장만 열립니다.**  
+> `.ps1`은 PowerShell 전용이라 `.bat` 파일을 사용하세요.
+
+### PowerShell
+
+```powershell
+cd C:\Users\thtgg\workspace2\ai_vtuber
+.\start-all.ps1
+.\stop-all.ps1
+.\start-pet.ps1
+.\open-obs-viewer.ps1
+```
+
+또는 cmd에서 한 줄로:
+
+```cmd
+powershell -ExecutionPolicy Bypass -File start-all.ps1
+```
+
+---
+
+## Electron 데스크톱 펫
+
+화면 위에 떠 있는 투명 창으로 에메스와 채팅할 수 있습니다.
+
+```powershell
+.\start-all.ps1   # 먼저 live2d(8001) 포함 전체 실행
+.\start-pet.ps1
+```
+
+| 조작 | 동작 |
+|------|------|
+| 캐릭터 클릭 | 채팅창 열기/닫기 |
+| 더블클릭 | 마우스 통과 모드 (뒤 창 클릭 가능) |
+| 트레이 아이콘 우클릭 | 표시/숨기기, 통과 모드, 종료 |
+| 드래그 | 창 위치 이동 |
+
+수동 실행:
 
 ```bash
-# live2d 서버가 먼저 실행 중이어야 합니다 (포트 8001)
 cd modules/live2d/electron
 npm install
 npm start
 ```
+
+---
+
+## OBS 방송 송출
+
+Live2D 서버(8001)가 실행 중이어야 합니다.
+
+### 1. URL 선택
+
+| 용도 | URL |
+|------|-----|
+| **투명 배경 (추천)** | `http://localhost:8001/live2d/static/?transparent=1` |
+| 크로마키 (녹색) | `http://localhost:8001/live2d/static/?chromakey=1` |
+| mao_pro + 투명 | `http://localhost:8001/live2d/static/?transparent=1&model=models/mao_pro/runtime/mao_pro.model3.json` |
+| Haru + 투명 | `http://localhost:8001/live2d/static/?transparent=1&model=models/Haru/Haru.model3.json` |
+
+```powershell
+.\open-obs-viewer.ps1   # URL 목록 + 브라우저 미리보기
+```
+
+### 2. OBS 브라우저 소스 설정
+
+1. **소스 추가** → **브라우저**
+2. **URL**에 위 주소 붙여넣기 (`transparent=1` 권장)
+3. **너비** `1920` / **높이** `1080`
+4. **사용자 지정 프레임 속도** `30` FPS
+5. **투명 배경** 체크 (`transparent=1` 사용 시)
+6. 크로마키 모드(`chromakey=1`) 사용 시: OBS **색도 키**로 `#00FF00` 제거
+
+### 3. 방송 채팅 연동
+
+채팅 수집을 켜면 시청자 메시지에 맞춰 표정이 자동 변경됩니다.
+
+```bash
+curl -X POST http://localhost:8000/broadcast/start \
+  -H "Content-Type: application/json" \
+  -d '{"platform": "chzzk", "channel_id": "your_channel_id"}'
+```
+
+OBS 브라우저 소스와 WebSocket이 같은 live2d 서버에 연결되어 있으면 표정/모션이 실시간 반영됩니다.
 
 ---
 
@@ -184,7 +291,7 @@ curl -X POST http://localhost:8001/live2d/motion \
 
 | 기능 | 상태 |
 |------|------|
-| Live2D 웹 뷰어 (Haru 모델) | 완료 |
+| Live2D 웹 뷰어 (mao_pro, Haru 선택 가능) | 완료 |
 | WebSocket 실시간 제어 | 완료 |
 | Electron 데스크톱 펫 | 완료 |
 | Ollama 채팅 엔진 | 완료 |

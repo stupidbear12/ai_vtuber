@@ -4,7 +4,7 @@ app/llm_provider.py — Ollama LLM 연동
 
 환경변수:
   OLLAMA_BASE_URL  — 기본 http://localhost:11434
-  OLLAMA_MODEL     — 기본 llama3.2
+  OLLAMA_MODEL     — 기본 emeth (ollama list 로 확인)
 """
 
 import os
@@ -17,7 +17,7 @@ def get_provider_config() -> dict:
     return {
         "provider": "ollama",
         "base_url": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-        "model": os.environ.get("OLLAMA_MODEL", "llama3.2"),
+        "model": os.environ.get("OLLAMA_MODEL", "emeth"),
     }
 
 
@@ -34,7 +34,7 @@ async def generate_text(
 ) -> str:
     """Ollama API로 텍스트 응답을 생성한다."""
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    model = os.environ.get("OLLAMA_MODEL", "llama3.2")
+    model = os.environ.get("OLLAMA_MODEL", "emeth")
 
     payload = {
         "model": model,

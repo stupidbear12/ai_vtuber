@@ -4,6 +4,10 @@ __pycache__/
 *.pyo
 .env
 *.bat
+!start-all.bat
+!stop-all.bat
+!start-pet.bat
+!check-ollama.bat
 
 # Live2D 바이너리 / 라이선스 제한 파일
 *.moc3
@@ -33,3 +37,7 @@ vts_token.json
 
 # 로그 파일
 *.log
+logs_*.txt
+
+# start-all.ps1 / stop-all.ps1 실행 상태
+.run/

@@ -156,22 +156,23 @@
 
 <script>
 // ── 설정 ──────────────────────────────────────────────────────
-// ai_live2d 서버 포트 8001에 연결
-const MODEL_URL = 'http://localhost:8001/live2d/static/models/Haru/Haru.model3.json';
+// ai_live2d 서버 포트 8001에 연결 (브라우저 뷰어와 동일 모델)
+const DEFAULT_MODEL = 'models/mao_pro/runtime/mao_pro.model3.json';
+const MODEL_URL = `http://localhost:8001/live2d/static/${DEFAULT_MODEL}`;
 const WS_URL    = 'ws://localhost:8001/live2d/ws';
 
-// 감정 이름 → Haru 표정(expression) 이름 매핑
+// 감정 이름 → 표정 매핑 (app.js EMOTION_TO_EXPR 와 동일)
 const EMOTION_MAP = {
-  neutral:   'F01', calm:     'F01', default:  'F01',
-  happy:     'F04', joy:      'F04',
-  sad:       'F02', fear:     'F02',
-  angry:     'F03',
-  surprise:  'F05', surprised: 'F05',
-  thinking:  'F06',
-  excited:   'F04',
-  worried:   'F02',
-  love:      'F04',
-  shy:       'F07',
+  neutral: 'exp_01', calm: 'exp_01', default: 'exp_01',
+  happy: 'exp_04', joy: 'exp_04', smirk: 'exp_04',
+  sad: 'exp_02', sadness: 'exp_02', fear: 'exp_02',
+  angry: 'exp_03', anger: 'exp_03', disgust: 'exp_03',
+  surprise: 'exp_04', surprised: 'exp_04',
+  thinking: 'exp_05',
+  excited: 'exp_04',
+  worried: 'exp_02',
+  love: 'exp_04',
+  shy: 'exp_05',
 };
 
 // ── DOM ───────────────────────────────────────────────────────
@@ -206,7 +207,7 @@ async function initLive2D() {
 
   animSys = new AnimSystem();
 
-  // Haru 모델 로드 (ai_live2d 서버에서 제공)
+  // mao_pro 모델 로드 (브라우저 뷰어와 동일)
   l2dModel = await PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false });
   pixiApp.stage.addChild(l2dModel);
   l2dModel.setRenderer(pixiApp.renderer);
@@ -274,7 +275,7 @@ function handleCmd(msg) {
       break;
     case 'set_emotion':
       // 감정 이름 → 표정 자동 변환
-      l2dModel.expression(EMOTION_MAP[msg.emotion] ?? 'F01');
+      l2dModel.expression(EMOTION_MAP[msg.emotion] ?? 'exp_01');
       break;
     case 'set_expression':
       // 표정 직접 지정
@@ -376,7 +377,7 @@ function handleReply(data) {
     addMsg('에메스: ' + data.reply, 'a');
     // 감정에 맞는 표정 변경
     if (data.emotion && l2dModel) {
-      l2dModel.expression(EMOTION_MAP[data.emotion] ?? 'F01');
+      l2dModel.expression(EMOTION_MAP[data.emotion] ?? 'exp_01');
     }
   }
 }

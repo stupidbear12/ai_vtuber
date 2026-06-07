@@ -149,7 +149,15 @@ async def generate_reply(
     except Exception as e:
         error_msg = str(e)
         logger.error(f"[ChatEngine] Ollama 호출 실패: {e}")
-        text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
+        if "404" in error_msg or "not found" in error_msg.lower():
+            from app.llm_provider import get_provider_config
+            cfg = get_provider_config()
+            text = (
+                f"Ollama 모델 '{cfg['model']}'을 찾을 수 없어. "
+                f"ollama list 로 확인하고 .env 의 OLLAMA_MODEL 을 맞춰줘!"
+            )
+        else:
+            text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
 
     # [감정:태그] 파싱 — 텍스트 앞부분에서 태그 추출 후 제거
     emotion = "calm"
