@@ -23,6 +23,9 @@ let pixiApp  = null;
 let l2dModel = null;
 let animSys  = null;
 let wsClient = null;
+let motionRestoreTimer = null;
+
+const DEFAULT_MOTION_MS = 5500;
 
 // 투명 모드 (OBS 브라우저 소스 / Electron 데스크톱 펫)
 const urlParams  = new URLSearchParams(location.search);
@@ -188,13 +191,46 @@ function setEmotion(emotionName) {
 }
 
 // ── Motion 제어 (pixi-live2d-display 내장) ───────────────────────
-function playMotion(group, index) {
+function restoreAfterMotion() {
+  if (motionRestoreTimer) {
+    clearTimeout(motionRestoreTimer);
+    motionRestoreTimer = null;
+  }
   if (!l2dModel) return;
+  l2dModel.internalModel.motionManager.stopAllMotions?.();
+  animSys?.startIdle();
+}
+
+/**
+ * @param {string} group
+ * @param {number} index
+ * @param {{ duration?: number, restoreIdle?: boolean }} [options]
+ */
+function playMotion(group, index, options = {}) {
+  if (!l2dModel) return;
+  const priority = PIXI.live2d.MotionPriority?.FORCE ?? 3;
+  const durationMs = options.duration ?? DEFAULT_MOTION_MS;
+  const restoreIdle = options.restoreIdle !== false;
+
+  if (motionRestoreTimer) {
+    clearTimeout(motionRestoreTimer);
+    motionRestoreTimer = null;
+  }
+
+  // AnimSystem 파라미터가 모션 파라미터를 덮어쓰지 않도록 idle 중지
+  animSys?.stopIdle();
+  l2dModel.internalModel.motionManager.stopAllMotions?.();
+
   try {
-    l2dModel.motion(group, index);
-    addLog(`모션: ${group}[${index}]`);
+    l2dModel.motion(group, index, priority);
+    const label = group || '(default)';
+    addLog(`모션: ${label}[${index}]`);
+    if (restoreIdle && durationMs > 0) {
+      motionRestoreTimer = setTimeout(restoreAfterMotion, durationMs);
+    }
   } catch (e) {
     console.warn('[Motion]', e);
+    if (restoreIdle) animSys?.startIdle();
   }
 }
 

@@ -8,10 +8,7 @@ fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 python-dotenv>=1.0.0
 
-# ── ai_chat, ai_live2d — Gemini API ────────────────────────────
-google-generativeai>=0.8.0
-
-# ── ai_vtuber_core, ai_broadcast — HTTP 클라이언트 ─────────────
+# ── ai_vtuber_core, ai_broadcast, ai_chat — HTTP 클라이언트 ────
 aiohttp>=3.9.0
 
 # ── ai_live2d — 정적 파일 서빙 ─────────────────────────────────

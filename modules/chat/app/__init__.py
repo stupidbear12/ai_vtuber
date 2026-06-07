@@ -1,1 +1,1 @@
-# ai_chat 패키지 — Gemini LLM 채팅 엔진
+# ai_chat 패키지 — Ollama LLM 채팅 엔진

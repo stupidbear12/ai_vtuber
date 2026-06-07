@@ -299,28 +299,16 @@ function handleCmd(msg) {
       animSys.stopIdle();
       break;
     case 'play_motion_once':
-      // 모션 한 번 재생 후 idle 복귀
+    case 'play_motion':
+    case 'set_motion': {
+      const priority = PIXI.live2d.MotionPriority?.FORCE ?? 3;
       animSys.stopIdle();
-      l2dModel.motion(msg.group ?? 'Idle', msg.index ?? 0);
+      l2dModel.internalModel.motionManager.stopAllMotions?.();
+      l2dModel.motion(msg.group ?? 'Idle', msg.index ?? 0, priority);
       setTimeout(() => {
         l2dModel.internalModel.motionManager.stopAllMotions?.();
         animSys.startIdle();
-      }, msg.duration ?? 5330);
-      break;
-    case 'play_motion': {
-      animSys.stopIdle();
-      const dur = msg.duration ?? 5500;
-      let restored = false;
-      const restore = () => {
-        if (restored) return;
-        restored = true;
-        l2dModel.internalModel.motionManager.stopAllMotions?.();
-        animSys.startIdle();
-      };
-      const timer = setTimeout(restore, dur);
-      l2dModel.motion(msg.group ?? 'Idle', msg.index ?? 0)
-        .then(() => { clearTimeout(timer); restore(); })
-        .catch(() => { clearTimeout(timer); restore(); });
+      }, msg.duration ?? 5500);
       break;
     }
   }

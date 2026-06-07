@@ -64,10 +64,23 @@ class Live2DWSClient {
         this._log(`표정: ${msg.expression}`);
         break;
 
-      // 모션 재생 (group, index)
+      // 모션 재생 (group, index, duration ms — 선택)
       case 'set_motion':
-        this._playMotion?.(msg.group ?? '', msg.index ?? 0);
-        this._log(`모션: ${msg.group}[${msg.index}]`);
+        this._playMotion?.(msg.group ?? '', msg.index ?? 0, {
+          duration: msg.duration,
+        });
+        break;
+
+      case 'play_motion_once':
+        this._playMotion?.(msg.group ?? '', msg.index ?? 0, {
+          duration: msg.duration,
+        });
+        break;
+
+      case 'play_motion':
+        this._playMotion?.(msg.group ?? '', msg.index ?? 0, {
+          duration: msg.duration,
+        });
         break;
 
       // 립싱크 — ParamA 직접 주입

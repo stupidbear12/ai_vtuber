@@ -3,7 +3,7 @@
 app/main.py — ai_chat 독립 서버 진입점
 
 역할:
-  - Google Gemini API를 활용한 에메스(emeth) 캐릭터 채팅 엔진
+  - Ollama LLM을 활용한 에메스(emeth) 캐릭터 채팅 엔진
   - 데스크톱 펫 모드(pet)와 방송 채팅 모드(broadcast) 지원
   - [감정:태그] 파싱으로 Live2D 표정 제어 정보 반환
 
@@ -12,7 +12,7 @@ app/main.py — ai_chat 독립 서버 진입점
 실행 방법:
     cd ai_chat
     pip install -r requirements.txt
-    cp .env.example .env  # .env에 GEMINI_API_KEY 입력
+    cp .env.example .env  # OLLAMA_MODEL 등 설정
     uvicorn app.main:app --reload --host 0.0.0.0 --port 8002
 
 API 엔드포인트:
@@ -35,12 +35,13 @@ except ImportError:
     pass
 
 from app.chat_engine import generate_reply
+from app.llm_provider import get_provider_config
 
 # ── FastAPI 앱 생성 ───────────────────────────────────────────────
 app = FastAPI(
     title="ai_chat — 에메스 채팅 엔진",
     description=(
-        "Google Gemini API 기반 에메스(emeth) 캐릭터 채팅 엔진. "
+        "Ollama 기반 에메스(emeth) 캐릭터 채팅 엔진. "
         "데스크톱 펫(pet)과 방송 채팅(broadcast) 두 가지 모드를 지원합니다."
     ),
     version="1.0.0",
@@ -93,8 +94,9 @@ async def health_check():
     return {
         "status": "ok",
         "module": "ai_chat",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "supported_modes": ["pet", "broadcast"],
+        "llm": get_provider_config(),
     }
 
 
@@ -110,6 +112,7 @@ async def get_persona():
             "happy", "sad", "surprised", "thinking", "excited",
             "calm", "worried", "angry", "love", "shy"
         ],
+        "llm": get_provider_config(),
     }
 
 
@@ -118,7 +121,7 @@ async def chat(req: ChatRequest):
     """에메스(emeth) 캐릭터로 채팅 응답을 생성한다.
 
     처리 흐름:
-      1. Gemini API 호출 (에메스 캐릭터 프롬프트 적용)
+      1. Ollama 호출 (에메스 캐릭터 프롬프트 적용)
       2. [감정:태그] 파싱 → emotion 추출
       3. 응답 텍스트 + 감정 반환
 
@@ -142,7 +145,7 @@ async def chat(req: ChatRequest):
             detail="mode는 'pet' 또는 'broadcast'만 허용됩니다."
         )
 
-    # Gemini 호출 → 응답 생성
+    # Ollama 호출 → 응답 생성
     result = await generate_reply(
         message=req.message,
         mode=mode,

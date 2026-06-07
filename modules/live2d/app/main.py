@@ -6,7 +6,7 @@ app/main.py — ai_live2d 독립 서버 진입점
   - Live2D 웹 뷰어 제공 (http://localhost:8001/live2d/static/)
   - WebSocket 채널 유지 (ws://localhost:8001/live2d/ws)
   - 표정/모션/립싱크/감정/반응 REST API
-  - 데스크톱 펫 채팅 엔드포인트 (/live2d/chat)
+  - 데스크톱 펫 채팅 엔드포인트 (/live2d/chat → ai_chat 위임)
 
 실행 방법:
     cd ai_live2d

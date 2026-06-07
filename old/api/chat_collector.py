@@ -13,10 +13,15 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Awaitable, Callable, Deque, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from ollama_client import ollama_chat
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ RANDOM_RESPONSE_RATE = 0.15   # 15% 확률로 일반 채팅에도 반응
 MIN_RESPONSE_INTERVAL = 5.0   # 전체 최소 반응 간격 (초)
 CHAT_BUFFER_SIZE = 30         # 채팅 히스토리 버퍼 크기
 
-# ─── 방송 채팅 전용 Gemini 시스템 프롬프트 ────────────────────────
+# ─── 방송 채팅 전용 Ollama 시스템 프롬프트 ────────────────────────
 _BROADCAST_SYSTEM_PROMPT = """\
 너는 "에메스(emeth)"라는 이름의 밝고 친근한 AI 버튜버야. 지금 라이브 방송 중이야.
 
@@ -378,7 +383,7 @@ class ChzzkChatCollector:
 # ─── 방송 채팅 매니저 (오케스트레이터) ──────────────────────────
 
 class BroadcastChatManager:
-    """치지직/유튜브 채팅 수집 + Gemini 반응 + WebSocket 브로드캐스트 파이프라인."""
+    """치지직/유튜브 채팅 수집 + Ollama 반응 + WebSocket 브로드캐스트 파이프라인."""
 
     def __init__(self, broadcast_fn: Callable[[dict], Awaitable[None]]):
         """
@@ -412,7 +417,7 @@ class BroadcastChatManager:
             self.stats["skipped"] += 1
 
     async def _response_worker(self) -> None:
-        """큐에서 채팅을 꺼내 Gemini 응답 생성 및 브로드캐스트."""
+        """큐에서 채팅을 꺼내 Ollama 응답 생성 및 브로드캐스트."""
         while self._running:
             try:
                 msg = await asyncio.wait_for(self._queue.get(), timeout=1.0)
@@ -430,15 +435,7 @@ class BroadcastChatManager:
                 self._queue.task_done()
 
     async def _respond_to_chat(self, msg: ChatMessage) -> None:
-        """Gemini 호출 → 감정/텍스트 추출 → WebSocket 브로드캐스트."""
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-
-        if not api_key:
-            logger.warning("[ChatManager] GEMINI_API_KEY 없음. 응답 생략.")
-            return
-
-        # 프롬프트 구성 — 최근 채팅 컨텍스트 + 현재 메시지
+        """Ollama 호출 → 감정/텍스트 추출 → WebSocket 브로드캐스트."""
         platform_tag = "[유튜브]" if msg.platform == "youtube" else "[치지직]"
         donation_hint = " [후원]" if msg.is_donation else ""
         current = f"{platform_tag} {msg.author}님{donation_hint}: {msg.message}"
@@ -453,17 +450,13 @@ class BroadcastChatManager:
             user_prompt = current
 
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=_BROADCAST_SYSTEM_PROMPT,
-                generation_config={"temperature": 0.8, "max_output_tokens": 150},
+            text = await ollama_chat(
+                _BROADCAST_SYSTEM_PROMPT,
+                user_prompt,
+                mode="broadcast",
             )
-            response = await model.generate_content_async(user_prompt)
-            text = response.text.strip()
         except Exception as e:
-            logger.error(f"[ChatManager] Gemini 호출 실패: {e}")
+            logger.error(f"[ChatManager] Ollama 호출 실패: {e}")
             return
 
         # 감정 태그 파싱

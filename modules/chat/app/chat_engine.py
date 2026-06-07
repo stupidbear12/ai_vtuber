@@ -1,23 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-app/chat_engine.py — 에메스(emeth) 캐릭터 Gemini 채팅 엔진
+app/chat_engine.py — 에메스(emeth) 캐릭터 채팅 엔진
 
 역할:
-  - Google Gemini API를 호출해 에메스 캐릭터로 응답 생성
+  - Ollama로 에메스 캐릭터 응답 생성
   - [감정:태그] 파싱으로 Live2D 표정 태그 추출
   - 두 가지 모드 지원:
       pet      — 데스크톱 펫 대화 (2~4문장, 친근한 일상 대화)
       broadcast — 방송 채팅 반응 (1~2문장, 짧고 임팩트 있게)
 """
 
-import os
 import re
 import logging
 from typing import Optional
 
+from app.llm_provider import generate_text
+
 logger = logging.getLogger(__name__)
 
-# 감정 태그 파싱 정규식 — Gemini 응답 맨 앞의 [감정:태그] 형식 추출
+# 감정 태그 파싱 정규식 — LLM 응답 맨 앞의 [감정:태그] 형식 추출
 _EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
 
 # 지원하는 감정 태그 목록 (Live2D 표정과 매핑됨)
@@ -106,35 +107,18 @@ def _get_system_prompt(mode: str) -> str:
     return _PET_SYSTEM_PROMPT
 
 
-def _get_generation_config(mode: str) -> dict:
-    """모드에 따른 Gemini 생성 설정 반환.
-
-    방송 모드는 짧은 응답을 위해 max_output_tokens를 줄임.
-
-    Args:
-        mode: "pet" 또는 "broadcast"
-
-    Returns:
-        generation_config 딕셔너리
-    """
-    if mode == "broadcast":
-        return {"temperature": 0.8, "max_output_tokens": 150}
-    return {"temperature": 0.7, "max_output_tokens": 200}
-
-
 async def generate_reply(
     message: str,
     mode: str = "pet",
     context: Optional[str] = None,
 ) -> dict:
-    """Gemini API를 호출해 에메스 캐릭터 응답을 생성한다.
+    """Ollama를 호출해 에메스 캐릭터 응답을 생성한다.
 
     처리 흐름:
-      1. 환경변수에서 API 키 및 모델명 로드
-      2. 모드에 맞는 시스템 프롬프트 선택
-      3. 컨텍스트(채팅 히스토리)가 있으면 프롬프트에 합산
-      4. Gemini 비동기 호출
-      5. [감정:태그] 파싱 → emotion 추출
+      1. 모드에 맞는 시스템 프롬프트 선택
+      2. 컨텍스트(채팅 히스토리)가 있으면 프롬프트에 합산
+      3. Ollama 비동기 호출
+      4. [감정:태그] 파싱 → emotion 추출
 
     Args:
         message: 사용자 입력 텍스트 또는 방송 채팅 내용
@@ -148,40 +132,24 @@ async def generate_reply(
             "error":   오류 메시지 (오류 발생 시만 포함)
         }
     """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-
     text = ""
     error_msg = None
 
+    if context:
+        user_prompt = f"[최근 채팅 흐름]\n{context}\n\n[지금 반응할 채팅]\n{message}"
+    else:
+        user_prompt = message
+
     try:
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
-
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-
-        # Gemini 모델 초기화 — 모드에 맞는 시스템 프롬프트 적용
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=_get_system_prompt(mode),
-            generation_config=_get_generation_config(mode),
+        text = await generate_text(
+            system_prompt=_get_system_prompt(mode),
+            user_prompt=user_prompt,
+            mode=mode,
         )
-
-        # 방송 모드: 채팅 히스토리 컨텍스트를 프롬프트 앞에 붙임
-        if context:
-            user_prompt = f"[최근 채팅 흐름]\n{context}\n\n[지금 반응할 채팅]\n{message}"
-        else:
-            user_prompt = message
-
-        # 비동기 Gemini 호출
-        response = await model.generate_content_async(user_prompt)
-        text = response.text.strip()
-
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"[ChatEngine] Gemini 호출 실패: {e}")
-        text = "죄송해요, 잠시 후 다시 말씀해주세요."
+        logger.error(f"[ChatEngine] Ollama 호출 실패: {e}")
+        text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
 
     # [감정:태그] 파싱 — 텍스트 앞부분에서 태그 추출 후 제거
     emotion = "calm"

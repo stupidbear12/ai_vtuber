@@ -15,14 +15,19 @@ live2d_web/router.py - Live2D 웹 뷰어용 FastAPI 라우터 (mao_pro 대응)
     POST /live2d/idle/start
     POST /live2d/idle/stop
     GET  /live2d/status    - 연결된 클라이언트 수
-    POST /live2d/chat      - 데스크톱 펫 채팅 (Google Gemini API 연동)
+    POST /live2d/chat      - 데스크톱 펫 채팅 (Ollama 연동)
 """
 
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Set, Union
+
+# old/ollama_client.py
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from ollama_client import ollama_chat
 
 try:
     from dotenv import load_dotenv
@@ -267,28 +272,14 @@ _EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
 
 @live2d_router.post("/chat")
 async def chat(req: ChatRequest):
-    """데스크톱 펫 채팅 — Google Gemini API로 응답 생성."""
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-
+    """데스크톱 펫 채팅 — Ollama로 응답 생성."""
     text = ""
     error_msg = None
     try:
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
-
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=_SYSTEM_PROMPT,
-            generation_config={"temperature": 0.7, "max_output_tokens": 200},
-        )
-        response = await model.generate_content_async(req.message)
-        text = response.text.strip()
+        text = await ollama_chat(_SYSTEM_PROMPT, req.message, mode="pet")
     except Exception as e:
         error_msg = str(e)
-        text = "죄송해요, 잠시 후 다시 말씀해주세요."
+        text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
 
     # 감정 태그 파싱
     emotion = "calm"

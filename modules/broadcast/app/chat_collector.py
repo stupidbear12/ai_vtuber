@@ -49,7 +49,7 @@ class ChatMessage:
 class ChatBuffer:
     """최근 N개 채팅 메시지를 유지하는 링 버퍼.
 
-    Gemini 컨텍스트 프롬프트 생성에 활용한다.
+    ai_chat 컨텍스트 프롬프트 생성에 활용한다.
     deque(maxlen=N)으로 자동 오래된 항목 제거.
     """
 
@@ -465,7 +465,7 @@ class BroadcastChatManager:
     """치지직/유튜브 채팅 수집 + ai_chat 연동 + ai_live2d 표정 제어 파이프라인.
 
     기존 ai_vtuber의 BroadcastChatManager에서 변경된 점:
-      - Gemini 직접 호출 → ai_chat 모듈 REST API 호출
+      - ai_chat 모듈 REST API 호출
       - ws_manager.broadcast() 직접 호출 → ai_live2d REST API 호출
     """
 

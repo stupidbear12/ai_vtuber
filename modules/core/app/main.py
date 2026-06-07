@@ -12,7 +12,7 @@ app/main.py — ai_vtuber_core 오케스트레이터 서버 진입점
 
 모듈 구성:
   ai_live2d    → http://localhost:8001  (Live2D 아바타)
-  ai_chat      → http://localhost:8002  (Gemini 채팅 엔진)
+  ai_chat      → http://localhost:8002  (Ollama 채팅 엔진)
   ai_broadcast → http://localhost:8003  (방송 채팅 수집)
   ai_voice     → http://localhost:8004  (음성 합성, 예정)
 
@@ -99,7 +99,7 @@ async def root():
           <td style="padding:8px">Live2D 아바타, WebSocket, Electron 펫</td></tr>
       <tr><td style="padding:8px">ai_chat</td>
           <td style="padding:8px"><a href="{cfg.chat_url()}" style="color:#89dceb">{cfg.chat_url()}</a></td>
-          <td style="padding:8px">Gemini 채팅 엔진 (에메스 캐릭터)</td></tr>
+          <td style="padding:8px">Ollama 채팅 엔진 (에메스 캐릭터)</td></tr>
       <tr><td style="padding:8px">ai_broadcast</td>
           <td style="padding:8px"><a href="{cfg.broadcast_url()}" style="color:#89dceb">{cfg.broadcast_url()}</a></td>
           <td style="padding:8px">치지직/유튜브 방송 채팅 수집</td></tr>

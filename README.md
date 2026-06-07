@@ -1,6 +1,6 @@
 # AI 버튜버 에메스(emeth)
 
-> Google Gemini 기반 AI 버튜버 시스템 — 모노레포 구조
+> Ollama 기반 AI 버튜버 시스템 — 모노레포 구조
 
 에메스(emeth)는 Live2D 아바타, AI 채팅 엔진, 방송 채팅 연동, 음성 합성을 갖춘 AI 버튜버입니다.  
 히브리어로 **"진실"** 을 뜻하는 이름처럼, 시청자와 솔직하고 진심 어린 대화를 나눕니다.
@@ -13,7 +13,7 @@
 ai_vtuber/
 ├── modules/
 │   ├── live2d/        포트 8001 — Live2D 아바타 서버 (웹뷰어, WebSocket, Electron 펫)
-│   ├── chat/          포트 8002 — Google Gemini 채팅 엔진 (에메스 캐릭터)
+│   ├── chat/          포트 8002 — Ollama 채팅 엔진 (에메스 캐릭터)
 │   ├── broadcast/     포트 8003 — 치지직/유튜브 방송 채팅 수집
 │   ├── voice/         포트 8004 — 음성 합성 (ElevenLabs 연동 예정)
 │   └── core/          포트 8000 — 오케스트레이터 (메인 API, 전체 상태 관리)
@@ -29,7 +29,7 @@ ai_vtuber/
 |------|------|------|
 | `core` | 8000 | 오케스트레이터 — 전체 상태 모니터링, 통합 채팅 파이프라인, 방송 시작/중지 |
 | `live2d` | 8001 | Live2D 웹 뷰어, WebSocket 실시간 제어, 표정/모션/립싱크 API, Electron 데스크톱 펫 |
-| `chat` | 8002 | Gemini API 기반 에메스 캐릭터 응답 생성 (pet/broadcast 두 가지 모드) |
+| `chat` | 8002 | Ollama 기반 에메스 캐릭터 응답 생성 (pet/broadcast 두 가지 모드) |
 | `broadcast` | 8003 | 치지직/유튜브 라이브 채팅 수집, 에메스 반응 자동화 |
 | `voice` | 8004 | 음성 합성 (현재 스텁 — ElevenLabs 연동 예정) |
 
@@ -43,7 +43,7 @@ ai_vtuber/
         ↓
   modules/broadcast (8003)
         ↓ POST /chat
-  modules/chat (8002) — Gemini API
+  modules/chat (8002) — Ollama
         ↓ {reply, emotion}
   modules/live2d (8001) — POST /live2d/emotion
         ↓ WebSocket broadcast
@@ -61,7 +61,7 @@ ai_vtuber/
 
 ```bash
 cp .env.example .env
-# .env 파일을 열어 GEMINI_API_KEY 입력
+# 호스트에서 ollama serve 실행 (API 키 불필요)
 ```
 
 ### 2. 전체 실행
@@ -171,8 +171,8 @@ curl -X POST http://localhost:8001/live2d/motion \
 
 | 변수명 | 필수 | 기본값 | 설명 |
 |--------|------|--------|------|
-| `GEMINI_API_KEY` | 필수 | — | Google Gemini API 키 |
-| `GEMINI_MODEL` | 선택 | `gemini-2.5-flash` | Gemini 모델명 |
+| `OLLAMA_BASE_URL` | 선택 | `http://localhost:11434` | Ollama API 주소 |
+| `OLLAMA_MODEL` | 선택 | `llama3.2` | Ollama 모델명 (`ollama pull` 필요) |
 | `AI_LIVE2D_URL` | 선택 | `http://localhost:8001` | live2d 모듈 URL |
 | `AI_CHAT_URL` | 선택 | `http://localhost:8002` | chat 모듈 URL |
 | `AI_BROADCAST_URL` | 선택 | `http://localhost:8003` | broadcast 모듈 URL |
@@ -187,7 +187,7 @@ curl -X POST http://localhost:8001/live2d/motion \
 | Live2D 웹 뷰어 (Haru 모델) | 완료 |
 | WebSocket 실시간 제어 | 완료 |
 | Electron 데스크톱 펫 | 완료 |
-| Google Gemini 채팅 엔진 | 완료 |
+| Ollama 채팅 엔진 | 완료 |
 | 에메스 캐릭터 시스템 프롬프트 | 완료 |
 | 치지직 채팅 연동 | 완료 |
 | 유튜브 채팅 연동 | 완료 |
