@@ -1,4 +1,4 @@
-# ai_chat — 에메스 채팅 엔진 Dockerfile
+# ai_chat — 시온 채팅 엔진 Dockerfile
 # 포트: 8002
 FROM python:3.11-slim
 

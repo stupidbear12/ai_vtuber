@@ -52,7 +52,7 @@ function createTray() {
     img = nativeImage.createEmpty();
   }
   tray = new Tray(img);
-  tray.setToolTip('에메스 (ai_live2d)');
+  tray.setToolTip('시온 (ai_live2d)');
   rebuildTrayMenu();
 }
 
@@ -107,7 +107,7 @@ ipcMain.on('chat-message', (_, msg) => {
     {
       hostname: 'localhost',
       port: SERVER_PORT,              // ai_live2d 서버 포트 (8001)
-      path: '/live2d/chat',           // 에메스 채팅 엔드포인트
+      path: '/live2d/chat',           // 시온 채팅 엔드포인트
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

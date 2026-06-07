@@ -1,4 +1,4 @@
-# AI 버튜버 에메스(emeth) — 전체 모듈 Docker Compose 설정
+# AI 버튜버 시온(sion) — 전체 모듈 Docker Compose 설정
 #
 # 실행 방법:
 #   cp .env.example .env   # .env에 API 키 입력
@@ -33,7 +33,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── 에메스 채팅 엔진 ───────────────────────────────────────────
+  # ── 시온 채팅 엔진 ───────────────────────────────────────────
   ai_chat:
     build:
       context: modules/chat
@@ -43,7 +43,7 @@ services:
       - "8002:8002"
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-emeth}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-sion}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

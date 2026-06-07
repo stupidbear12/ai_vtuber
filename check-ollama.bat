@@ -23,5 +23,5 @@ echo.
 powershell -NoProfile -Command "try { $r = Invoke-RestMethod http://localhost:11434/api/tags -TimeoutSec 3; Write-Host '[API] 실행 중 (포트 11434)' -ForegroundColor Green } catch { Write-Host '[API] 미실행 - Ollama 앱을 시작하세요' -ForegroundColor Red }"
 
 echo.
-echo .env 설정: OLLAMA_MODEL=emeth
+echo .env 설정: OLLAMA_MODEL=sion
 pause

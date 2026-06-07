@@ -5,7 +5,7 @@ app/voice_engine.py — ElevenLabs TTS 엔진 핵심 로직
 역할:
   - ElevenLabs Python SDK를 래핑하여 TTS/Voice Design 기능 제공
   - 감정 태그 → 음성 파라미터 매핑 (stability, style 등)
-  - 기본 음성(에메스) 설정 및 커스텀 음성 로컬 저장 관리
+  - 기본 음성(시온) 설정 및 커스텀 음성 로컬 저장 관리
   - 음성 목록 조회, 음성 디자인(Voice Design) API 연동
 
 ElevenLabs SDK 버전: elevenlabs>=1.0.0
@@ -84,7 +84,7 @@ class ElevenLabsEngine:
     """ElevenLabs TTS/Voice Design API 연동 엔진.
 
     싱글톤으로 사용하며, ELEVENLABS_API_KEY 환경변수로 인증한다.
-    커스텀 음성(에메스)은 data/custom_voices.json에 로컬 저장된다.
+    커스텀 음성(시온)은 data/custom_voices.json에 로컬 저장된다.
     """
 
     def __init__(self) -> None:
@@ -258,7 +258,7 @@ class ElevenLabsEngine:
           2단계: 미리보기에서 실제 음성 생성 및 계정 저장
 
         Args:
-            name: 음성 이름 (예: "에메스")
+            name: 음성 이름 (예: "시온")
             description: 음성 설명 (예: "밝고 귀여운 20대 여성, 약간 높은 톤, 한국어")
 
         Returns:

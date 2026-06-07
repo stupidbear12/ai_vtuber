@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-app/chat_collector.py — 치지직/유튜브 방송 채팅 수집 및 에메스 반응 모듈
+app/chat_collector.py — 치지직/유튜브 방송 채팅 수집 및 시온 반응 모듈
 
 지원 플랫폼:
   - 유튜브 라이브: pytchat 라이브러리 (API 키 불필요)
   - 치지직(Chzzk): 비공식 WebSocket API
 
 모듈 연동 방식:
-  - ai_chat  (기본 http://localhost:8002) → POST /chat 으로 에메스 응답 생성
+  - ai_chat  (기본 http://localhost:8002) → POST /chat 으로 시온 응답 생성
   - ai_live2d (기본 http://localhost:8001) → POST /live2d/emotion 으로 표정 변경
 """
 
@@ -26,7 +26,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 # ── 채팅 선별 설정 ────────────────────────────────────────────────
-TRIGGER_KEYWORDS = ["에메스", "emeth", "@에메스", "@emeth"]  # 이 키워드 포함 시 무조건 반응
+TRIGGER_KEYWORDS = ["시온", "sion", "@시온", "@sion"]  # 이 키워드 포함 시 무조건 반응
 RANDOM_RESPONSE_RATE = 0.15   # 트리거 키워드 없어도 15% 확률로 반응
 MIN_RESPONSE_INTERVAL = 5.0   # 연속 응답 최소 간격 (초) — 스팸 방지
 CHAT_BUFFER_SIZE = 30         # 최근 채팅 히스토리 보관 개수
@@ -93,7 +93,7 @@ class ChatFilter:
         self._last_response_time: float = 0.0
 
     def should_respond(self, msg: ChatMessage) -> bool:
-        """이 채팅에 에메스가 반응해야 하는지 판단.
+        """이 채팅에 시온가 반응해야 하는지 판단.
 
         우선순위:
           1. 후원/슈퍼챗 → 무조건 반응
@@ -563,7 +563,7 @@ class BroadcastChatManager:
         # 최근 채팅 히스토리를 컨텍스트로 전달 (자연스러운 맥락 반응)
         chat_context = self._buffer.get_context_text(limit=10)
 
-        # ── Step 2: ai_chat 호출 → 에메스 응답 생성 ───────────────
+        # ── Step 2: ai_chat 호출 → 시온 응답 생성 ───────────────
         try:
             async with aiohttp.ClientSession() as session:
                 payload = {

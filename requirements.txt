@@ -1,4 +1,4 @@
-# AI 버튜버 에메스(emeth) — 전체 모듈 통합 의존성
+# AI 버튜버 시온(sion) — 전체 모듈 통합 의존성
 # 개별 모듈은 modules/{name}/requirements.txt 참조
 # 이 파일은 모든 모듈 의존성을 한 번에 설치할 때 사용합니다:
 #   pip install -r requirements.txt

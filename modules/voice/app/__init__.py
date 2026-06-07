@@ -1,1 +1,1 @@
-# ai_voice 패키지 — 음성 합성 (ElevenLabs 연동 예정)
+# ai_voice 패키지 — 시온(sion) 음성 합성 (ElevenLabs)

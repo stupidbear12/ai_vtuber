@@ -4,7 +4,7 @@ app/main.py — ai_broadcast 독립 서버 진입점
 
 역할:
   - 치지직/유튜브 방송 채팅 수집
-  - 선별된 채팅을 ai_chat 모듈로 전달해 에메스 응답 생성
+  - 선별된 채팅을 ai_chat 모듈로 전달해 시온 응답 생성
   - ai_live2d 모듈로 표정 변경 명령 전송
 
 포트: 8003
@@ -16,7 +16,7 @@ app/main.py — ai_broadcast 독립 서버 진입점
     uvicorn app.main:app --reload --host 0.0.0.0 --port 8003
 
 의존 서비스:
-    ai_chat  (http://localhost:8002) — 에메스 채팅 응답 생성
+    ai_chat  (http://localhost:8002) — 시온 채팅 응답 생성
     ai_live2d (http://localhost:8001) — Live2D 표정 변경
 """
 
@@ -48,7 +48,7 @@ _manager: Optional[BroadcastChatManager] = None
 app = FastAPI(
     title="ai_broadcast — 방송 채팅 수집 서버",
     description=(
-        "치지직/유튜브 라이브 채팅을 수집하고 에메스(emeth) 캐릭터로 반응합니다. "
+        "치지직/유튜브 라이브 채팅을 수집하고 시온(sion) 캐릭터로 반응합니다. "
         "ai_chat(채팅 엔진)과 ai_live2d(아바타)와 연동합니다."
     ),
     version="1.0.0",
@@ -104,7 +104,7 @@ async def broadcast_start(req: BroadcastStartRequest):
     """방송 채팅 수집을 시작한다.
 
     치지직 또는 유튜브 채팅을 수집하고,
-    선별된 채팅에 대해 ai_chat을 통해 에메스 응답을 생성한다.
+    선별된 채팅에 대해 ai_chat을 통해 시온 응답을 생성한다.
 
     Args:
         req.platform: "youtube" 또는 "chzzk"

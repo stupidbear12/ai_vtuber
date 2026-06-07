@@ -218,7 +218,7 @@ async def idle_stop():
 
 @live2d_router.post("/chat")
 async def chat(req: ChatRequest):
-    """데스크톱 펫 채팅 — ai_chat 모듈에 위임해 에메스 응답을 생성한다.
+    """데스크톱 펫 채팅 — ai_chat 모듈에 위임해 시온 응답을 생성한다.
 
     처리 흐름:
       1. ai_chat POST /chat (mode=pet) 호출
@@ -229,7 +229,7 @@ async def chat(req: ChatRequest):
         req.message: 사용자 입력 텍스트
 
     Returns:
-        reply: 에메스 응답 텍스트
+        reply: 시온 응답 텍스트
         emotion: 감정 태그 (Live2D 표정 변경에 사용)
     """
     text = ""

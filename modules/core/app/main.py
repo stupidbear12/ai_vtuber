@@ -50,7 +50,7 @@ from app.orchestrator import (
 app = FastAPI(
     title="ai_vtuber_core — 오케스트레이터 API",
     description=(
-        "AI 버튜버 에메스(emeth) 전체 시스템의 오케스트레이터. "
+        "AI 버튜버 시온(sion) 전체 시스템의 오케스트레이터. "
         "ai_live2d(아바타), ai_chat(채팅 엔진), ai_broadcast(방송 연동), "
         "ai_voice(음성)를 통합 제어합니다."
     ),
@@ -99,7 +99,7 @@ async def root():
           <td style="padding:8px">Live2D 아바타, WebSocket, Electron 펫</td></tr>
       <tr><td style="padding:8px">ai_chat</td>
           <td style="padding:8px"><a href="{cfg.chat_url()}" style="color:#89dceb">{cfg.chat_url()}</a></td>
-          <td style="padding:8px">Ollama 채팅 엔진 (에메스 캐릭터)</td></tr>
+          <td style="padding:8px">Ollama 채팅 엔진 (시온 캐릭터)</td></tr>
       <tr><td style="padding:8px">ai_broadcast</td>
           <td style="padding:8px"><a href="{cfg.broadcast_url()}" style="color:#89dceb">{cfg.broadcast_url()}</a></td>
           <td style="padding:8px">치지직/유튜브 방송 채팅 수집</td></tr>
@@ -147,7 +147,7 @@ async def pipeline_chat(req: ChatRequest):
     """통합 채팅 파이프라인을 실행한다.
 
     흐름:
-      1. ai_chat 모듈로 에메스 응답 생성
+      1. ai_chat 모듈로 시온 응답 생성
       2. ai_live2d 모듈로 표정 변경
       3. (선택) ai_voice 모듈로 TTS 변환 — with_voice=True 시 실행
 
@@ -157,7 +157,7 @@ async def pipeline_chat(req: ChatRequest):
         req.with_voice: True면 TTS 음성 변환 포함 (audio_base64 필드 반환)
 
     Returns:
-        reply: 에메스 응답 텍스트
+        reply: 시온 응답 텍스트
         emotion: 감정 태그
         live2d_updated: 표정 변경 성공 여부
         audio_base64: base64 인코딩된 MP3 (with_voice=True 시, 실패하면 null)

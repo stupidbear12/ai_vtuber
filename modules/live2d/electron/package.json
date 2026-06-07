@@ -1,7 +1,7 @@
 {
   "name": "ai-live2d-desktop-pet",
   "version": "1.0.0",
-  "description": "에메스(emeth) Live2D 데스크톱 펫 — ai_live2d 모듈",
+  "description": "시온(sion) Live2D 데스크톱 펫 — ai_live2d 모듈",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -14,7 +14,7 @@
   },
   "build": {
     "appId": "com.aivtuber.ailive2d",
-    "productName": "emeth Desktop Pet",
+    "productName": "Sion Desktop Pet",
     "directories": {
       "output": "dist"
     },

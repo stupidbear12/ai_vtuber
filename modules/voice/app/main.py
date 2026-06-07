@@ -5,7 +5,7 @@ app/main.py — ai_voice ElevenLabs TTS 서버 진입점
 역할:
   - ElevenLabs API를 사용한 텍스트 음성 합성 (TTS)
   - 음성 디자인 (Voice Design) — 텍스트 설명으로 새 목소리 생성
-  - 음성 목록 조회 및 기본 음성(에메스) 설정 관리
+  - 음성 목록 조회 및 기본 음성(시온) 설정 관리
   - 실시간 스트리밍 TTS (StreamingResponse)
 
 포트: 8004
@@ -15,7 +15,7 @@ app/main.py — ai_voice ElevenLabs TTS 서버 진입점
   POST /voice/tts/stream   — 텍스트 → MP3 스트리밍
   POST /voice/design       — 텍스트 프롬프트로 새 음성 생성
   GET  /voice/list         — 사용 가능한 음성 목록
-  POST /voice/set-default  — 기본 음성(에메스) 설정
+  POST /voice/set-default  — 기본 음성(시온) 설정
   GET  /voice/status       — 현재 음성 설정 정보
   GET  /health             — 서버 상태 확인
 
@@ -62,7 +62,7 @@ app = FastAPI(
     title="ai_voice — ElevenLabs TTS 서버",
     description=(
         "ElevenLabs API를 사용한 텍스트 음성 합성 모듈. "
-        "에메스(AI 버튜버) 캐릭터 음성 합성 및 음성 디자인을 지원합니다."
+        "시온(AI 버튜버) 캐릭터 음성 합성 및 음성 디자인을 지원합니다."
     ),
     version="1.0.0",
 )
@@ -87,7 +87,7 @@ class TTSRequest(BaseModel):
 
 class VoiceDesignRequest(BaseModel):
     """음성 디자인 요청 모델."""
-    name: str           # 생성할 음성 이름 (예: "에메스")
+    name: str           # 생성할 음성 이름 (예: "시온")
     description: str    # 음성 설명 (예: "밝고 귀여운 20대 여성, 약간 높은 톤, 한국어")
 
 
@@ -215,10 +215,10 @@ async def design_voice(req: VoiceDesignRequest):
       1. 설명 기반 미리보기 생성
       2. 미리보기에서 실제 음성 저장
 
-    생성된 voice_id는 /voice/set-default로 에메스 기본 음성으로 설정 가능.
+    생성된 voice_id는 /voice/set-default로 시온 기본 음성으로 설정 가능.
 
     Args:
-        req.name: 음성 이름 (예: "에메스")
+        req.name: 음성 이름 (예: "시온")
         req.description: 음성 설명
                          (예: "밝고 귀여운 20대 여성, 약간 높은 톤, 에너지 넘치는 한국어")
 
@@ -250,7 +250,7 @@ async def list_voices():
     """ElevenLabs 계정의 음성 목록을 조회한다.
 
     빌트인 음성 + 클론 음성 + Voice Design으로 만든 커스텀 음성 포함.
-    기본 음성(에메스)이 목록 맨 앞에 표시된다.
+    기본 음성(시온)이 목록 맨 앞에 표시된다.
 
     Returns:
         {
@@ -276,7 +276,7 @@ async def list_voices():
 
 @app.post("/voice/set-default")
 async def set_default_voice(req: SetDefaultRequest):
-    """기본 음성(에메스)을 설정한다.
+    """기본 음성(시온)을 설정한다.
 
     설정된 voice_id는 data/custom_voices.json에 저장되어 재시작 후에도 유지된다.
     /voice/tts 요청 시 voice_id를 생략하면 이 기본값이 사용된다.

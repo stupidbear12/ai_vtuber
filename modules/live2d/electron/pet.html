@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>에메스 데스크톱 펫</title>
+<title>시온 데스크톱 펫</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -87,7 +87,7 @@
   }
   .cm:last-child { border-bottom: none; }
   .cm.u   { color: #56cfb2; }   /* 사용자 메시지 */
-  .cm.a   { color: #e0b0ff; }   /* 에메스 응답 */
+  .cm.a   { color: #e0b0ff; }   /* 시온 응답 */
   .cm.err { color: #f76c6c; font-size: 11px; }  /* 오류 */
 
   /* 입력 행 */
@@ -138,7 +138,7 @@
 <div id="chat-wrap">
   <div id="chat-msgs"></div>
   <div id="ci-row">
-    <input id="ci" type="text" placeholder="에메스에게 말을 걸어보세요 (Enter)"
+    <input id="ci" type="text" placeholder="시온에게 말을 걸어보세요 (Enter)"
            maxlength="200" autocomplete="off" spellcheck="false">
     <button class="cbtn" id="btn-send">전송</button>
     <button class="cbtn" id="btn-close">✕</button>
@@ -374,7 +374,7 @@ function handleReply(data) {
     return;
   }
   if (data.reply) {
-    addMsg('에메스: ' + data.reply, 'a');
+    addMsg('시온: ' + data.reply, 'a');
     // 감정에 맞는 표정 변경
     if (data.emotion && l2dModel) {
       l2dModel.expression(EMOTION_MAP[data.emotion] ?? 'exp_01');
