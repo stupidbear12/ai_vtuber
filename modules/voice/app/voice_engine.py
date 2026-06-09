@@ -266,11 +266,15 @@ class ElevenLabsEngine:
         """
         client = self._get_client()
 
-        # 1단계: 텍스트 설명으로 음성 미리보기 생성
+        # 1단계: 텍스트 설명으로 음성 미리보기 생성 (SDK v2: text_to_voice.create_previews)
         logger.info(f"음성 디자인 시작: {name} — {description}")
-        previews = client.voice_generation.generate_voice_previews(
+        previews = client.text_to_voice.create_previews(
             voice_description=description,
-            text=f"안녕하세요! 저는 {name}입니다. 만나서 반가워요!",
+            text=(
+                f"안녕! 나 {name}이야~ 만나서 진짜 반가워! "
+                "오늘 하루 어떻게 보냈어? 나는 엄청 신나는 일이 있었는데, "
+                "같이 얘기하면서 즐거운 시간 보내자! 뭐든지 물어봐도 돼, 항상 여기 있을게~"
+            ),
         )
 
         if not previews.previews:
@@ -279,8 +283,8 @@ class ElevenLabsEngine:
         # 첫 번째 미리보기를 선택 (추후 여러 개 중 선택 지원 가능)
         preview = previews.previews[0]
 
-        # 2단계: 미리보기를 계정에 음성으로 저장
-        new_voice = client.voice_generation.create_a_voice_from_preview(
+        # 2단계: 미리보기를 계정에 음성으로 저장 (SDK v2: text_to_voice.create)
+        new_voice = client.text_to_voice.create(
             voice_name=name,
             voice_description=description,
             generated_voice_id=preview.generated_voice_id,

@@ -206,14 +206,16 @@ class ChzzkChatCollector:
     연결이 끊기면 자동으로 재연결을 시도한다.
     """
 
-    # 치지직 WebSocket 명령 코드 (역공학으로 파악)
-    _CMD_WORKER = 0           # 워커 연결 요청
+    # 치지직 WebSocket 명령 코드 (비공식 역공학)
+    # 참고: 치지직은 네이버 NBASE 채팅 WebSocket 프로토콜을 사용함
+    _CMD_PING = 0             # 핑/heartbeat — cmd=0은 연결 유지용으로도 사용됨
+    _CMD_WORKER = 0           # 워커 연결 요청 (초기 핸드셰이크)
     _CMD_WORKER_RESULT = 5    # 워커 연결 결과 (sid 포함)
-    _CMD_CONNECT = 100        # 채팅 채널 연결
-    _CMD_CONNECTED = 10000    # 연결 완료
-    _CMD_CHAT = 10100         # 일반 채팅
-    _CMD_DONATION = 10101     # 후원
-    _CMD_SUBSCRIPTION = 10103 # 구독
+    _CMD_CONNECT = 100        # 채팅 채널 구독 요청
+    _CMD_CONNECTED = 10000    # 채팅 채널 구독 완료
+    _CMD_CHAT = 10100         # 일반 채팅 메시지
+    _CMD_DONATION = 10101     # 후원 (치즈)
+    _CMD_SUBSCRIPTION = 10103 # 구독 알림
 
     def __init__(self, channel_id: str, on_message: Callable[[ChatMessage], None]):
         """
@@ -368,8 +370,9 @@ class ChzzkChatCollector:
                             if not self._running:
                                 break
                             try:
+                                # _CMD_PING(0)으로 서버에 heartbeat 전송
                                 await ws.send(self._build_msg(
-                                    cmd=0,
+                                    cmd=self._CMD_PING,
                                     cid=chat_channel_id,
                                     sid=sid,
                                     tid=tid[0],
@@ -492,6 +495,8 @@ class BroadcastChatManager:
         self._collect_task: Optional[asyncio.Task] = None
         self._worker_task: Optional[asyncio.Task] = None
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+        # start() 호출 시 현재 이벤트 루프를 저장 — 스레드 안전 큐 삽입에 사용
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # 통계: 수신/응답/건너뜀/오류 횟수
         self.stats: dict = {
@@ -502,12 +507,26 @@ class BroadcastChatManager:
         }
 
     def _on_chat(self, msg: ChatMessage) -> None:
-        """채팅 수신 콜백 (동기 — 스레드 안전하게 큐에 넣기만 함).
+        """채팅 수신 콜백 — 임의 스레드에서 호출될 수 있음.
 
-        버퍼에 메시지를 추가하고, 반응 대상이면 처리 큐에 적재.
+        YouTube 수집기(pytchat)는 executor 스레드에서 이 콜백을 호출하므로
+        asyncio.Queue를 직접 조작하면 스레드 안전성 문제가 생긴다.
+        loop.call_soon_threadsafe로 실제 처리를 이벤트 루프 스레드에 위임한다.
 
         Args:
             msg: 수신된 채팅 메시지
+        """
+        if self._loop is not None:
+            # 이벤트 루프 스레드에 안전하게 _enqueue 예약
+            self._loop.call_soon_threadsafe(self._enqueue, msg)
+
+    def _enqueue(self, msg: ChatMessage) -> None:
+        """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
+
+        call_soon_threadsafe에 의해 항상 이벤트 루프 스레드에서 호출된다.
+
+        Args:
+            msg: 처리할 채팅 메시지
         """
         self.stats["received"] += 1
         self._buffer.add(msg)  # 히스토리 버퍼에 추가
@@ -625,6 +644,8 @@ class BroadcastChatManager:
         self._platform = platform
         self._channel_id = channel_id
         self._running = True
+        # _on_chat이 스레드에서 호출될 때 call_soon_threadsafe에서 사용할 루프 저장
+        self._loop = asyncio.get_running_loop()
         self.stats = {"received": 0, "responded": 0, "skipped": 0, "errors": 0}
 
         # 플랫폼에 맞는 수집기 생성
@@ -665,6 +686,7 @@ class BroadcastChatManager:
         self._collector = None
         self._collect_task = None
         self._worker_task = None
+        self._loop = None  # 루프 참조 해제 (추가 콜백 예약 차단)
 
         final_stats = dict(self.stats)
         logger.info(f"[ChatManager] 수집 중지. 통계: {final_stats}")

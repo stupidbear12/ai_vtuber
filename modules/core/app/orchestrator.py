@@ -15,6 +15,7 @@ app/orchestrator.py — ai_vtuber_core 모듈 간 연동 오케스트레이터
   ai_voice      → 8004
 """
 
+import asyncio
 import os
 import logging
 from typing import Optional
@@ -72,9 +73,6 @@ async def _get_module_health(session: aiohttp.ClientSession, name: str, url: str
         return {"name": name, "url": url, "status": "timeout", "error": "응답 시간 초과"}
     except Exception as e:
         return {"name": name, "url": url, "status": "error", "error": str(e)}
-
-
-import asyncio
 
 
 async def check_all_modules() -> dict:
