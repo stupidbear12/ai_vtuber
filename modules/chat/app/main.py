@@ -6,22 +6,27 @@ app/main.py — ai_chat 독립 서버 진입점
   - Ollama LLM을 활용한 시온(sion) 캐릭터 채팅 엔진
   - 데스크톱 펫 모드(pet)와 방송 채팅 모드(broadcast) 지원
   - [감정:태그] 파싱으로 Live2D 표정 제어 정보 반환
+  - RAG: 과거 대화 기억 + 캐릭터 지식 베이스 연동
 
 포트: 8002
 
 실행 방법:
-    cd ai_chat
+    cd modules/chat
     pip install -r requirements.txt
     cp .env.example .env  # OLLAMA_MODEL 등 설정
     uvicorn app.main:app --reload --host 0.0.0.0 --port 8002
 
 API 엔드포인트:
-    POST /chat         — 시온 채팅 응답 생성
-    GET  /health       — 서버 상태 확인
-    GET  /chat/persona — 현재 사용 가능한 모드 목록
+    POST /chat          — 시온 채팅 응답 생성
+    GET  /health        — 서버 상태 확인
+    GET  /chat/persona  — 현재 사용 가능한 모드 목록
+    GET  /memory/stats  — RAG 메모리 현황 (디버그용)
 """
 
+import asyncio
+import logging
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -37,6 +42,38 @@ except ImportError:
 from app.chat_engine import generate_reply
 from app.llm_provider import get_provider_config
 
+logger = logging.getLogger(__name__)
+
+
+# ── 서버 수명주기 ─────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """서버 시작/종료 훅.
+
+    시작 시: RAG 메모리 엔진을 초기화하고 지식 베이스를 백그라운드로 로드한다.
+    로드가 완료되기 전에도 서버는 정상 응답하며, 로드 후 RAG가 활성화된다.
+    """
+    try:
+        from app.memory import get_memory_engine
+
+        async def _load_knowledge():
+            engine = get_memory_engine()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, engine.load_knowledge_docs)
+            logger.info("[Main] RAG 지식 베이스 로드 완료")
+
+        # 백그라운드 로드 — 서버 시작을 블로킹하지 않음
+        asyncio.create_task(_load_knowledge())
+        logger.info("[Main] RAG 메모리 엔진 초기화 시작 (백그라운드)")
+    except ImportError:
+        logger.warning("[Main] RAG 패키지 없음 — 기억 기능 없이 실행")
+    except Exception as e:
+        logger.warning(f"[Main] RAG 초기화 실패 (기억 기능 비활성화): {e}")
+
+    yield  # 서버 실행 중
+
+
 # ── FastAPI 앱 생성 ───────────────────────────────────────────────
 app = FastAPI(
     title="ai_chat — 시온 채팅 엔진",
@@ -44,7 +81,8 @@ app = FastAPI(
         "Ollama 기반 시온(sion) 캐릭터 채팅 엔진. "
         "데스크톱 펫(pet)과 방송 채팅(broadcast) 두 가지 모드를 지원합니다."
     ),
-    version="1.0.0",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 # ── CORS 미들웨어 ─────────────────────────────────────────────────
@@ -61,15 +99,17 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     """채팅 요청 모델."""
-    message: str           # 사용자 입력 텍스트 또는 방송 채팅 내용
-    mode: Optional[str] = "pet"     # "pet" (기본) 또는 "broadcast"
-    context: Optional[str] = None   # 방송 모드에서 최근 채팅 히스토리 (선택적)
+    message: str
+    mode: Optional[str] = "pet"           # "pet" 또는 "broadcast"
+    context: Optional[str] = None         # 방송 모드 채팅 히스토리 (선택)
+    viewer_name: Optional[str] = None     # 방송 모드 시청자 닉네임 (선택)
+
 
 class ChatResponse(BaseModel):
     """채팅 응답 모델."""
-    reply: str             # 시온 응답 텍스트 (감정 태그 제거됨)
-    emotion: str           # 감정 태그 (Live2D 표정 변경에 사용)
-    error: Optional[str] = None  # 오류 발생 시 오류 메시지
+    reply: str
+    emotion: str
+    error: Optional[str] = None
 
 
 # ── 엔드포인트 ───────────────────────────────────────────────────
@@ -83,6 +123,7 @@ async def root():
     <ul>
       <li><a href="/docs" style="color:#89dceb">API 문서 (Swagger)</a></li>
       <li><a href="/health" style="color:#89dceb">서버 상태 확인</a></li>
+      <li><a href="/memory/stats" style="color:#89dceb">RAG 메모리 현황</a></li>
     </ul>
     </body></html>
     """
@@ -94,8 +135,9 @@ async def health_check():
     return {
         "status": "ok",
         "module": "ai_chat",
-        "version": "1.1.0",
+        "version": "2.0.0",
         "supported_modes": ["pet", "broadcast"],
+        "rag_enabled": _is_rag_available(),
         "llm": get_provider_config(),
     }
 
@@ -108,12 +150,25 @@ async def get_persona():
             "pet": "데스크톱 펫 대화 모드 — 2~4문장, 친근한 일상 대화",
             "broadcast": "방송 채팅 반응 모드 — 1~2문장, 짧고 임팩트 있게",
         },
-        "emotions": [
+        "emotions": list(sorted([
             "happy", "sad", "surprised", "thinking", "excited",
             "calm", "worried", "angry", "love", "shy"
-        ],
+        ])),
         "llm": get_provider_config(),
     }
+
+
+@app.get("/memory/stats")
+async def memory_stats():
+    """RAG 메모리 현황 — 대화 기억 수, 지식 청크 수 등 반환 (디버그용)."""
+    try:
+        from app.memory import get_memory_engine
+        engine = get_memory_engine()
+        return {"rag_enabled": True, **engine.get_stats()}
+    except ImportError:
+        return {"rag_enabled": False, "reason": "chromadb 또는 sentence-transformers 미설치"}
+    except Exception as e:
+        return {"rag_enabled": False, "error": str(e)}
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -121,20 +176,12 @@ async def chat(req: ChatRequest):
     """시온(sion) 캐릭터로 채팅 응답을 생성한다.
 
     처리 흐름:
-      1. Ollama 호출 (시온 캐릭터 프롬프트 적용)
-      2. [감정:태그] 파싱 → emotion 추출
-      3. 응답 텍스트 + 감정 반환
-
-    Args:
-        req.message: 사용자 입력 또는 방송 채팅 내용
-        req.mode: "pet" (기본값) 또는 "broadcast"
-        req.context: 방송 모드에서 최근 채팅 히스토리 (선택적)
-
-    Returns:
-        reply: 시온 응답 텍스트
-        emotion: 감정 태그 (Live2D 표정 변경에 활용)
+      1. RAG: 관련 기억 & 지식 베이스 검색 (비동기, 타임아웃 적용)
+      2. Ollama 호출 (시온 캐릭터 프롬프트 + RAG 컨텍스트)
+      3. [감정:태그] 파싱 → emotion 추출
+      4. RAG: 대화 기억 저장 (fire-and-forget)
+      5. 응답 텍스트 + 감정 반환
     """
-    # 입력 검증
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message가 비어있습니다.")
 
@@ -142,19 +189,30 @@ async def chat(req: ChatRequest):
     if mode not in ("pet", "broadcast"):
         raise HTTPException(
             status_code=400,
-            detail="mode는 'pet' 또는 'broadcast'만 허용됩니다."
+            detail="mode는 'pet' 또는 'broadcast'만 허용됩니다.",
         )
 
-    # Ollama 호출 → 응답 생성
     result = await generate_reply(
         message=req.message,
         mode=mode,
         context=req.context,
+        viewer_name=req.viewer_name,
     )
 
     return ChatResponse(**result)
 
 
+# ── 헬퍼 ─────────────────────────────────────────────────────────
+
+def _is_rag_available() -> bool:
+    """RAG 기능 사용 가능 여부 확인."""
+    try:
+        import chromadb  # noqa: F401
+        import sentence_transformers  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 if __name__ == "__main__":
-    # 직접 실행 시: python -m app.main
     uvicorn.run("app.main:app", host="0.0.0.0", port=8002, reload=True)

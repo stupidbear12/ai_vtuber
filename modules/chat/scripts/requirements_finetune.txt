@@ -1,0 +1,27 @@
+# 파인튜닝 전용 의존성
+# 기존 서버 requirements.txt와 별도 conda 환경에서 설치하세요
+#
+# 설치 순서:
+#   1) conda create -n emeth_finetune python=3.11 -y
+#   2) conda activate emeth_finetune
+#   3) pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   4) pip install -r modules/chat/scripts/requirements_finetune.txt
+
+# Gemma 3 지원: transformers >= 4.50.0 필수
+transformers>=4.50.0
+datasets>=2.19.0
+accelerate>=0.29.0
+
+# QLoRA
+peft>=0.10.0
+bitsandbytes>=0.43.3
+
+# SFTTrainer
+trl>=0.8.6
+
+# 토크나이저 의존성
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+
+# HuggingFace Hub
+huggingface-hub>=0.22.0

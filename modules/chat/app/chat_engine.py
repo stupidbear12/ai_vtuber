@@ -5,11 +5,13 @@ app/chat_engine.py — 시온(sion) 캐릭터 채팅 엔진
 역할:
   - Ollama로 시온 캐릭터 응답 생성
   - [감정:태그] 파싱으로 Live2D 표정 태그 추출
+  - RAG: 과거 대화 기억 + 캐릭터 지식 베이스를 컨텍스트에 주입
   - 두 가지 모드 지원:
       pet      — 데스크톱 펫 대화 (2~4문장, 친근한 일상 대화)
       broadcast — 방송 채팅 반응 (1~2문장, 짧고 임팩트 있게)
 """
 
+import asyncio
 import re
 import logging
 from typing import Optional
@@ -17,6 +19,14 @@ from typing import Optional
 from app.llm_provider import generate_text
 
 logger = logging.getLogger(__name__)
+
+# RAG 활성화 여부 — chromadb/sentence-transformers 없으면 자동 비활성화
+_RAG_ENABLED = False
+try:
+    from app.memory import get_memory_engine
+    _RAG_ENABLED = True
+except ImportError:
+    logger.warning("[ChatEngine] RAG 의존 패키지 없음 — 기억 기능 비활성화")
 
 # 감정 태그 파싱 정규식 — LLM 응답 맨 앞의 [감정:태그] 형식 추출
 _EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
@@ -92,36 +102,87 @@ _BROADCAST_SYSTEM_PROMPT = """\
 
 
 def _get_system_prompt(mode: str) -> str:
-    """모드에 따른 시스템 프롬프트 반환.
-
-    Args:
-        mode: "pet" (데스크톱 펫, 기본값) 또는 "broadcast" (방송 채팅)
-
-    Returns:
-        시스템 프롬프트 문자열
-    """
+    """모드에 따른 시스템 프롬프트 반환."""
     if mode == "broadcast":
         return _BROADCAST_SYSTEM_PROMPT
     return _PET_SYSTEM_PROMPT
+
+
+async def _build_rag_context(message: str, mode: str) -> str:
+    """RAG 컨텍스트를 빌드한다.
+
+    과거 대화 기억과 캐릭터 지식을 동시에 검색해서
+    LLM에 주입할 컨텍스트 문자열을 반환한다.
+
+    방송 모드는 속도 우선이므로 검색 타임아웃을 짧게 설정한다.
+    """
+    if not _RAG_ENABLED:
+        return ""
+
+    try:
+        memory = get_memory_engine()
+
+        # 방송 모드: 1초, 펫 모드: 2초 타임아웃
+        timeout = 1.0 if mode == "broadcast" else 2.0
+
+        # 과거 대화 & 지식 베이스 병렬 검색
+        mem_count = 2 if mode == "broadcast" else 3
+        know_count = 1 if mode == "broadcast" else 2
+
+        memories, knowledge = await asyncio.gather(
+            memory.search_memories(message, n_results=mem_count, timeout=timeout),
+            memory.search_knowledge(message, n_results=know_count, timeout=timeout),
+            return_exceptions=True,
+        )
+
+        # gather에서 예외가 반환된 경우 빈 리스트로 처리
+        if isinstance(memories, Exception):
+            logger.warning(f"[ChatEngine] 기억 검색 오류: {memories}")
+            memories = []
+        if isinstance(knowledge, Exception):
+            logger.warning(f"[ChatEngine] 지식 검색 오류: {knowledge}")
+            knowledge = []
+
+        parts = []
+
+        if memories:
+            parts.append("[관련 기억]")
+            for mem in memories:
+                parts.append(f"- {mem}")
+
+        if knowledge:
+            parts.append("[캐릭터 참고 정보]")
+            for doc in knowledge:
+                parts.append(doc)
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.warning(f"[ChatEngine] RAG 컨텍스트 빌드 실패: {e}")
+        return ""
 
 
 async def generate_reply(
     message: str,
     mode: str = "pet",
     context: Optional[str] = None,
+    viewer_name: Optional[str] = None,
 ) -> dict:
     """Ollama를 호출해 시온 캐릭터 응답을 생성한다.
 
     처리 흐름:
-      1. 모드에 맞는 시스템 프롬프트 선택
-      2. 컨텍스트(채팅 히스토리)가 있으면 프롬프트에 합산
-      3. Ollama 비동기 호출
-      4. [감정:태그] 파싱 → emotion 추출
+      1. RAG: 관련 과거 대화 & 캐릭터 지식 검색
+      2. 모드에 맞는 시스템 프롬프트 선택
+      3. RAG 컨텍스트 + 채팅 히스토리 + 현재 메시지로 프롬프트 구성
+      4. Ollama 비동기 호출
+      5. [감정:태그] 파싱 → emotion 추출
+      6. RAG: 생성된 대화 쌍을 비동기 저장 (fire-and-forget)
 
     Args:
         message: 사용자 입력 텍스트 또는 방송 채팅 내용
-        mode: "pet" 또는 "broadcast" — 응답 길이와 스타일 결정
+        mode: "pet" 또는 "broadcast"
         context: 방송 모드에서 최근 채팅 히스토리 (선택적)
+        viewer_name: 방송 모드에서 시청자 닉네임 (선택적)
 
     Returns:
         {
@@ -133,10 +194,18 @@ async def generate_reply(
     text = ""
     error_msg = None
 
+    # RAG 컨텍스트 빌드 (실패해도 계속 진행)
+    rag_context = await _build_rag_context(message, mode)
+
+    # 유저 프롬프트 구성
+    # 우선순위: RAG 컨텍스트 → 채팅 히스토리 → 현재 메시지
     if context:
         user_prompt = f"[최근 채팅 흐름]\n{context}\n\n[지금 반응할 채팅]\n{message}"
     else:
         user_prompt = message
+
+    if rag_context:
+        user_prompt = f"{rag_context}\n\n{user_prompt}"
 
     try:
         text = await generate_text(
@@ -161,12 +230,22 @@ async def generate_reply(
     emotion = "calm"
     m = _EMOTION_RE.match(text)
     if m:
-        emotion = m.group(1)         # "happy", "sad" 등 추출
-        text = text[m.end():]        # 태그 제거 후 실제 응답만 남김
+        emotion = m.group(1)
+        text = text[m.end():]
 
     # 유효하지 않은 감정 태그는 calm으로 폴백
     if emotion not in VALID_EMOTIONS:
         emotion = "calm"
+
+    # RAG: 오류 없이 성공한 대화만 기억에 저장 (응답을 블로킹하지 않음)
+    if not error_msg and _RAG_ENABLED:
+        try:
+            memory = get_memory_engine()
+            asyncio.create_task(
+                memory.save_conversation(message, text, mode, viewer_name)
+            )
+        except Exception as e:
+            logger.warning(f"[ChatEngine] 대화 저장 태스크 생성 실패: {e}")
 
     result = {"reply": text, "emotion": emotion}
     if error_msg:
