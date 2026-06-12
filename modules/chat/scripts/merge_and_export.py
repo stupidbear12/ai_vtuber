@@ -31,7 +31,7 @@ SCRIPT_DIR   = Path(__file__).parent.resolve()
 LORA_DIR     = SCRIPT_DIR.parent / "output" / "sion-llama31-qlora" / "final"
 MERGED_DIR   = SCRIPT_DIR.parent / "output" / "sion-llama31-merged"
 GGUF_OUT     = SCRIPT_DIR.parent / "output" / "sion-llama31-q4_k_m.gguf"
-BASE_MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+BASE_MODEL_ID = "unsloth/Meta-Llama-3.1-8B-Instruct"
 
 
 def merge_lora() -> None:

@@ -8,7 +8,7 @@
 # 파인튜닝 후 GGUF 등록 시 FROM 줄을 아래로 교체:
 #   FROM ./modules/chat/output/sion-llama31-q4_k_m.gguf
 
-FROM llama3.1:8b
+FROM ../output/sion-llama31-q8_0.gguf
 
 SYSTEM """너는 "시온(sion)"이라는 이름의 밝고 친근한 AI 컴패니언이야.
 

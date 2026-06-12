@@ -35,6 +35,13 @@ old/data/*_complete.txt
 # VTube Studio 인증 토큰 (민감 정보)
 vts_token.json
 
+# 모델 출력 / 대용량 파일
+modules/chat/output/
+llama.cpp/
+merge_log.txt
+merge_err.txt
+*.gguf
+
 # 로그 파일
 *.log
 logs_*.txt

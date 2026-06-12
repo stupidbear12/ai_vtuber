@@ -31,7 +31,7 @@ DATA_PATH   = SCRIPT_DIR.parent / "data" / "emeth_dataset.jsonl"
 OUTPUT_DIR  = SCRIPT_DIR.parent / "output" / "sion-llama31-qlora"
 
 # ── 모델 ─────────────────────────────────────────────────────────────
-BASE_MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+BASE_MODEL_ID = "unsloth/Meta-Llama-3.1-8B-Instruct"
 
 # ── QLoRA 하이퍼파라미터 ─────────────────────────────────────────────
 LORA_R       = 16
@@ -239,33 +239,39 @@ def run_training(model, tokenizer, dataset) -> Path:
         remove_unused_columns=False,
     )
 
-    # TRL 버전별 호환성 처리
-    try:
-        from trl import SFTTrainer, SFTConfig
-        # TRL >= 0.12: SFTConfig 사용 가능
-        sft_config = SFTConfig(
-            **vars(training_args),
-            max_seq_length=MAX_SEQ_LENGTH,
-            dataset_text_field="text",
-            packing=False,
-        )
-        trainer = SFTTrainer(
-            model=model,
-            args=sft_config,
-            train_dataset=dataset,
-            processing_class=tokenizer,
-        )
-    except (ImportError, TypeError):
-        from trl import SFTTrainer
-        trainer = SFTTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset,
-            tokenizer=tokenizer,
-            max_seq_length=MAX_SEQ_LENGTH,
-            dataset_text_field="text",
-            packing=False,
-        )
+    from trl import SFTTrainer, SFTConfig
+
+    sft_config = SFTConfig(
+        output_dir=str(OUTPUT_DIR),
+        num_train_epochs=NUM_EPOCHS,
+        per_device_train_batch_size=BATCH_SIZE,
+        gradient_accumulation_steps=GRAD_ACCUM,
+        learning_rate=LEARNING_RATE,
+        warmup_ratio=WARMUP_RATIO,
+        lr_scheduler_type="cosine",
+        bf16=True,
+        tf32=True,
+        optim="paged_adamw_8bit",
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        dataloader_pin_memory=False,
+        logging_steps=10,
+        save_steps=50,
+        save_total_limit=2,
+        load_best_model_at_end=False,
+        report_to="none",
+        remove_unused_columns=True,
+        max_seq_length=MAX_SEQ_LENGTH,
+        dataset_text_field="text",
+        packing=False,
+    )
+
+    trainer = SFTTrainer(
+        model=model,
+        args=sft_config,
+        train_dataset=dataset,
+        processing_class=tokenizer,
+    )
 
     total_steps = len(trainer.get_train_dataloader()) * NUM_EPOCHS
     log.info("=" * 60)
