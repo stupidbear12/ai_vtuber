@@ -16,13 +16,14 @@ app/router.py — Live2D 제어 FastAPI 라우터
   POST /live2d/reaction      — 반응 애니메이션 (nod/shake/surprised/superchat)
   POST /live2d/idle/start    — Idle 애니메이션 시작
   POST /live2d/idle/stop     — Idle 애니메이션 정지
+  POST /live2d/broadcast     — 방송 speak 브로드캐스트 (자막 + TTS 음성)
   POST /live2d/chat          — 데스크톱 펫 채팅 (ai_chat 모듈 위임)
 """
 
 import logging
 import os
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import aiohttp
 
@@ -57,38 +58,48 @@ def _chat_url() -> str:
 
 class ParamRequest(BaseModel):
     """파라미터 직접 주입 요청 모델."""
-    params: dict  # 예: {"ParamAngleX": 15.0, "ParamEyeLOpen": 0.8}
+    params: dict
 
 class EmotionRequest(BaseModel):
     """감정 이름 요청 모델."""
-    emotion: str  # 예: "happy", "sad", "surprised", "thinking", "calm"
+    emotion: str
 
 class ExpressionRequest(BaseModel):
     """표정 직접 지정 요청 모델."""
-    expression: Union[str, int]  # 이름("F04") 또는 0-based 인덱스(3)
+    expression: Union[str, int]
 
 class MotionRequest(BaseModel):
     """모션 재생 요청 모델."""
-    group: str = ""   # 모션 그룹명 (예: "Idle")
-    index: int = 0    # 그룹 내 인덱스
+    group: str = ""
+    index: int = 0
 
 class PlayOnceRequest(BaseModel):
     """모션 한 번 재생 후 idle 복귀 요청 모델."""
     group: str = "Idle"
     index: int = 0
-    duration: int = 5330  # 모션 재생 후 idle 복귀까지 대기 시간 (ms)
+    duration: int = 5330
 
 class MouthRequest(BaseModel):
     """립싱크 값 설정 요청 모델."""
-    value: float  # 0.0 (입 닫힘) ~ 1.0 (입 최대 개방)
+    value: float
 
 class ReactionRequest(BaseModel):
     """반응 애니메이션 요청 모델."""
-    name: str  # "nod" | "shake" | "surprised" | "superchat"
+    name: str
+
+class BroadcastSpeakRequest(BaseModel):
+    """방송 모듈에서 보내는 speak 명령 모델."""
+    cmd: str = "speak"
+    text: str
+    emotion: str = "calm"
+    author: str = ""
+    platform: str = ""
+    is_donation: bool = False
+    audio_base64: Optional[str] = None
 
 class ChatRequest(BaseModel):
     """데스크톱 펫 채팅 요청 모델."""
-    message: str  # 사용자 입력 텍스트
+    message: str
 
 
 # ── 라우트 정의 ──────────────────────────────────────────────────
@@ -101,19 +112,13 @@ async def viewer():
 
 @live2d_router.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
-    """실시간 Live2D 제어 WebSocket 엔드포인트.
-
-    브라우저(웹 뷰어 / Electron 펫)에서 연결해
-    서버에서 보내는 cmd 메시지를 수신한다.
-    """
+    """실시간 Live2D 제어 WebSocket 엔드포인트."""
     await ws_manager.connect(ws)
     try:
         while True:
-            # 클라이언트 → 서버 메시지 수신 (현재 로깅만)
             raw = await ws.receive_text()
             print(f"[Live2D WS 수신] {raw[:120]}")
     except WebSocketDisconnect:
-        # 클라이언트 연결 해제 시 풀에서 제거
         ws_manager.disconnect(ws)
 
 
@@ -125,22 +130,14 @@ async def status():
 
 @live2d_router.post("/params")
 async def set_params(req: ParamRequest):
-    """Cubism 파라미터를 직접 주입한다.
-
-    브라우저 측 AnimSystem.setManualParams()를 호출해
-    모델의 특정 파라미터 값을 즉시 변경한다.
-    """
+    """Cubism 파라미터를 직접 주입한다."""
     await ws_manager.broadcast({"cmd": "set_params", "params": req.params})
     return {"ok": True, "clients": ws_manager.count}
 
 
 @live2d_router.post("/emotion")
 async def set_emotion(req: EmotionRequest):
-    """감정 이름으로 표정을 자동 변환한다.
-
-    브라우저 측 EMOTION_MAP으로 expression 이름을 변환해 적용한다.
-    지원 감정: calm, happy, sad, surprised, thinking, angry, excited 등
-    """
+    """감정 이름으로 표정을 자동 변환한다."""
     await ws_manager.broadcast({"cmd": "set_emotion", "emotion": req.emotion})
     return {"ok": True}
 
@@ -154,7 +151,7 @@ async def set_expression(req: ExpressionRequest):
 
 @live2d_router.post("/motion")
 async def play_motion(req: MotionRequest):
-    """모션을 재생한다. 완료 후 브라우저가 자동으로 idle 복귀한다."""
+    """모션을 재생한다."""
     await ws_manager.broadcast({"cmd": "set_motion", "group": req.group, "index": req.index})
     return {"ok": True}
 
@@ -188,21 +185,14 @@ async def clear_mouth():
 
 @live2d_router.post("/reaction")
 async def trigger_reaction(req: ReactionRequest):
-    """반응 애니메이션을 트리거한다.
-
-    지원 반응:
-      - nod: 고개 끄덕임
-      - shake: 고개 가로젓기
-      - surprised: 놀람 (눈 크게)
-      - superchat: 슈퍼챗 감사 반응
-    """
+    """반응 애니메이션을 트리거한다."""
     await ws_manager.broadcast({"cmd": "reaction", "name": req.name})
     return {"ok": True}
 
 
 @live2d_router.post("/idle/start")
 async def idle_start():
-    """Idle 애니메이션을 시작한다 (호흡 + 눈 깜빡임 + 고개 흔들림)."""
+    """Idle 애니메이션을 시작한다."""
     await ws_manager.broadcast({"cmd": "idle_start"})
     return {"ok": True}
 
@@ -214,24 +204,37 @@ async def idle_stop():
     return {"ok": True}
 
 
+# ── 방송 speak 브로드캐스트 엔드포인트 ──────────────────────────
+
+@live2d_router.post("/broadcast")
+async def broadcast_speak(req: BroadcastSpeakRequest):
+    """방송 모듈에서 시온 응답 + TTS 음성을 수신해 WebSocket 클라이언트에 브로드캐스트.
+
+    브라우저 측(OBS 브라우저 소스)에서 speak 명령을 받으면:
+      1. 자막 텍스트 표시
+      2. base64 오디오 디코딩 후 재생
+      3. 감정에 맞는 표정 변경
+    """
+    payload: dict = {
+        "cmd": "speak",
+        "text": req.text,
+        "emotion": req.emotion,
+        "author": req.author,
+        "platform": req.platform,
+        "is_donation": req.is_donation,
+    }
+    if req.audio_base64:
+        payload["audio_base64"] = req.audio_base64
+
+    await ws_manager.broadcast(payload)
+    return {"ok": True, "clients": ws_manager.count}
+
+
 # ── 데스크톱 펫 채팅 엔드포인트 ─────────────────────────────────
 
 @live2d_router.post("/chat")
 async def chat(req: ChatRequest):
-    """데스크톱 펫 채팅 — ai_chat 모듈에 위임해 시온 응답을 생성한다.
-
-    처리 흐름:
-      1. ai_chat POST /chat (mode=pet) 호출
-      2. 응답의 emotion으로 WebSocket 클라이언트 표정 브로드캐스트
-      3. reply + emotion 반환
-
-    Args:
-        req.message: 사용자 입력 텍스트
-
-    Returns:
-        reply: 시온 응답 텍스트
-        emotion: 감정 태그 (Live2D 표정 변경에 사용)
-    """
+    """데스크톱 펫 채팅 — ai_chat 모듈에 위임해 시온 응답을 생성한다."""
     text = ""
     emotion = "calm"
     error_msg = None
@@ -268,13 +271,7 @@ async def chat(req: ChatRequest):
 # ── 정적 파일 마운트 ─────────────────────────────────────────────
 
 def mount_static(app) -> None:
-    """FastAPI 앱에 Live2D 정적 파일 디렉토리를 마운트한다.
-
-    /live2d/static/ 경로로 웹 뷰어 HTML, 모델 파일, JS 라이브러리를 제공한다.
-
-    Args:
-        app: FastAPI 애플리케이션 인스턴스
-    """
+    """FastAPI 앱에 Live2D 정적 파일 디렉토리를 마운트한다."""
     app.mount(
         "/live2d/static",
         StaticFiles(directory=str(_STATIC_DIR), html=True),

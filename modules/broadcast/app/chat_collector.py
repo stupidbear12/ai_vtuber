@@ -12,6 +12,7 @@ app/chat_collector.py — 치지직/유튜브 방송 채팅 수집 및 시온 �
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -465,26 +466,35 @@ class ChzzkChatCollector:
 # ── 방송 채팅 매니저 (오케스트레이터) ──────────────────────────
 
 class BroadcastChatManager:
-    """치지직/유튜브 채팅 수집 + ai_chat 연동 + ai_live2d 표정 제어 파이프라인.
+    """치지직/유튜브 채팅 수집 + ai_chat + ai_voice TTS + ai_live2d 파이프라인.
 
-    기존 ai_vtuber의 BroadcastChatManager에서 변경된 점:
-      - ai_chat 모듈 REST API 호출
-      - ws_manager.broadcast() 직접 호출 → ai_live2d REST API 호출
+    처리 흐름:
+      1. 채팅 수집 (치지직 WebSocket / 유튜브 pytchat)
+      2. 채팅 선별 (키워드, 후원, 랜덤 확률)
+      3. ai_chat POST /chat → 시온 응답 + 감정 태그
+      4. ai_voice POST /voice/tts → TTS 음성 (MP3)
+      5. ai_live2d POST /live2d/emotion → 표정 변경
     """
 
     def __init__(
         self,
         chat_url: str = "http://localhost:8002",
         live2d_url: str = "http://localhost:8001",
+        voice_url: str = "http://localhost:8004",
     ):
         """
         Args:
             chat_url: ai_chat 서버 URL (기본: http://localhost:8002)
             live2d_url: ai_live2d 서버 URL (기본: http://localhost:8001)
+            voice_url: ai_voice 서버 URL (기본: http://localhost:8004)
         """
         # 환경변수로 URL 오버라이드 가능
         self._chat_url = os.environ.get("AI_CHAT_URL", chat_url).rstrip("/")
         self._live2d_url = os.environ.get("AI_LIVE2D_URL", live2d_url).rstrip("/")
+        self._voice_url = os.environ.get("AI_VOICE_URL", voice_url).rstrip("/")
+        self._voice_enabled = os.environ.get(
+            "BROADCAST_VOICE_ENABLED", "true"
+        ).lower() in ("true", "1", "yes")
 
         self._buffer = ChatBuffer()
         self._filter = ChatFilter()
@@ -569,7 +579,8 @@ class BroadcastChatManager:
         흐름:
           1. 방송용 메시지 포맷 구성 (플랫폼 태그 + 후원 힌트)
           2. ai_chat POST /chat 호출 → {reply, emotion} 수신
-          3. ai_live2d POST /live2d/emotion 호출 → 표정 변경
+          3. ai_voice POST /voice/tts → TTS 음성 생성 (선택)
+          4. ai_live2d POST /live2d/emotion → 표정 변경
 
         Args:
             msg: 처리할 채팅 메시지
@@ -610,9 +621,34 @@ class BroadcastChatManager:
             f"{msg.message[:30]} → [{emotion}] {reply_text[:50]}"
         )
 
-        # ── Step 3: ai_live2d 표정 변경 ───────────────────────────
+        # ── Step 3: ai_voice TTS 음성 생성 (선택) ─────────────────
+        audio_base64: Optional[str] = None
+        if self._voice_enabled and reply_text:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self._voice_url}/voice/tts",
+                        json={"text": reply_text, "emotion": emotion},
+                        timeout=aiohttp.ClientTimeout(total=30.0),
+                    ) as resp:
+                        if resp.status == 200:
+                            audio_bytes = await resp.read()
+                            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+                            logger.debug(
+                                f"[ChatManager] TTS 생성 완료: "
+                                f"{len(audio_bytes)} bytes"
+                            )
+                        else:
+                            logger.warning(
+                                f"[ChatManager] ai_voice TTS 실패: HTTP {resp.status}"
+                            )
+            except Exception as e:
+                logger.warning(f"[ChatManager] ai_voice 연결 실패 (무시): {e}")
+
+        # ── Step 4: ai_live2d 표정 변경 + 음성 재생 ───────────────
         try:
             async with aiohttp.ClientSession() as session:
+                # 표정 변경
                 async with session.post(
                     f"{self._live2d_url}/live2d/emotion",
                     json={"emotion": emotion},
@@ -620,6 +656,31 @@ class BroadcastChatManager:
                 ) as resp:
                     if resp.status != 200:
                         logger.warning(f"[ChatManager] ai_live2d 표정 변경 실패: HTTP {resp.status}")
+
+                # 자막 + 음성 브로드캐스트 (Live2D WebSocket 클라이언트로 전달)
+                broadcast_payload: dict = {
+                    "cmd": "speak",
+                    "text": reply_text,
+                    "emotion": emotion,
+                    "author": msg.author,
+                    "platform": msg.platform,
+                    "is_donation": msg.is_donation,
+                }
+                if audio_base64:
+                    broadcast_payload["audio_base64"] = audio_base64
+
+                async with session.post(
+                    f"{self._live2d_url}/live2d/broadcast",
+                    json=broadcast_payload,
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp:
+                    if resp.status == 200:
+                        logger.debug("[ChatManager] speak 브로드캐스트 완료")
+                    elif resp.status == 404:
+                        # broadcast 엔드포인트 미구현 — 무시
+                        logger.debug("[ChatManager] /live2d/broadcast 미구현 (무시)")
+                    else:
+                        logger.debug(f"[ChatManager] broadcast 전송: HTTP {resp.status}")
         except Exception as e:
             logger.warning(f"[ChatManager] ai_live2d 연결 실패 (무시): {e}")
 
@@ -708,4 +769,6 @@ class BroadcastChatManager:
             "queue_size": self._queue.qsize(),
             "chat_url": self._chat_url,
             "live2d_url": self._live2d_url,
+            "voice_url": self._voice_url,
+            "voice_enabled": self._voice_enabled,
         }
