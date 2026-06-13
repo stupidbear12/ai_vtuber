@@ -68,7 +68,7 @@ Import-RootEnv (Join-Path $Root ".env")
 $python = Get-PythonExe
 $pyArgsPrefix = @()
 if ((Split-Path $python -Leaf) -eq "py.exe") {
-    $pyArgsPrefix = @("-3")
+    $pyArgsPrefix = @("-3.11")
 }
 
 $modules = @(

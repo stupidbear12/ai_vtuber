@@ -2,3 +2,10 @@ fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 aiohttp>=3.9.0
 python-dotenv>=1.0.0
+
+# RAG 메모리 시스템
+# 참고: sentence-transformers는 torch를 의존함.
+#   CPU 전용 환경이라면 먼저 아래 명령으로 CPU torch 설치 권장:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+chromadb>=0.4.0
+sentence-transformers>=2.2.0

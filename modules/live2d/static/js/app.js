@@ -143,6 +143,10 @@ async function loadModel(modelPath) {
     // 내장 모션 정지 — AnimSystem이 파라미터 제어
     l2dModel.internalModel.motionManager.stopAllMotions?.();
 
+    // 파라미터 인덱스 맵 구축 + draw 후크 설치
+    buildParamIndexMap();
+    hookDrawForParams();
+
     // 히트 영역 클릭 → 모션 재생
     l2dModel.on('hit', (hitAreas) => {
       for (const area of hitAreas) {
@@ -153,9 +157,6 @@ async function loadModel(modelPath) {
 
     setModelStatus(true, modelPath.split('/').slice(-2, -1)[0] || '모델');
     addLog('모델 로드 성공');
-
-    pixiApp.ticker.remove(renderTick);
-    pixiApp.ticker.add(renderTick);
   } catch (e) {
     setModelStatus(false, '로드 실패');
     addLog(`오류: ${e.message}`);
@@ -163,15 +164,50 @@ async function loadModel(modelPath) {
   }
 }
 
-// ── 파라미터 주입 루프 ───────────────────────────────────────────
-function renderTick() {
-  if (!l2dModel || !animSys) return;
-  const merged    = animSys.tick();
-  const coreModel = l2dModel.internalModel.coreModel;
-  for (const [id, val] of Object.entries(merged)) {
-    try { coreModel.setParameterValueById(id, val, 1.0); } catch (_) {}
+// ── 파라미터 인덱스 맵 ──────────────────────────────────────────
+// Cubism 5 SDK 버그: getParameterIndex()가 잘못된 인덱스를 반환함.
+// getParameterId(i)로 올바른 ID→인덱스 매핑을 직접 구축한다.
+let _paramIndexMap = {};
+
+function buildParamIndexMap() {
+  const core = l2dModel.internalModel.coreModel;
+  const count = core.getParameterCount();
+  _paramIndexMap = {};
+  for (let i = 0; i < count; i++) {
+    try {
+      const idObj = core.getParameterId(i);
+      const idStr = idObj?._id?.s;
+      if (idStr) _paramIndexMap[idStr] = i;
+    } catch (_) {}
   }
+  addLog(`파라미터 맵: ${Object.keys(_paramIndexMap).length}개`);
 }
+
+// ── 파라미터 주입 (draw 후크) ───────────────────────────────────
+// Pixi v8에서 ticker 콜백이 정상 실행되지 않는 문제가 있어
+// internalModel.draw()를 래핑하여 draw 직전에 파라미터를 주입한다.
+function hookDrawForParams() {
+  const im = l2dModel.internalModel;
+  const origDraw = im.draw.bind(im);
+
+  im.draw = function (gl) {
+    if (animSys && _paramIndexMap) {
+      const merged = animSys.tick();
+      const core = this.coreModel;
+      for (const [id, val] of Object.entries(merged)) {
+        const idx = _paramIndexMap[id];
+        if (idx !== undefined) {
+          core.setParameterValueByIndex(idx, val);
+        }
+      }
+      core.update();
+    }
+    return origDraw(gl);
+  };
+}
+
+// 레거시 호환 — 외부에서 renderTick 참조 시 오류 방지
+function renderTick() {}
 
 // ── Expression 제어 (pixi-live2d-display 내장) ───────────────────
 function setExpression(nameOrIndex) {

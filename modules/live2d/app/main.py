@@ -21,10 +21,33 @@ Electron 펫 실행 (별도 터미널):
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import HTMLResponse
 
 from app.router import live2d_router, mount_static
+
+
+class NoCacheMiddleware:
+    """정적 파일 캐싱 방지 — ASGI 미들웨어 (BaseHTTPMiddleware 대신 순수 ASGI)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
+                headers.append((b"pragma", b"no-cache"))
+                headers.append((b"expires", b"0"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 # ── FastAPI 앱 생성 ───────────────────────────────────────────────
 app = FastAPI(
@@ -49,6 +72,7 @@ app.add_middleware(
 # ── 라우터 및 정적 파일 등록 ──────────────────────────────────────
 app.include_router(live2d_router)  # /live2d/* 엔드포인트
 mount_static(app)                  # /live2d/static/* 정적 파일
+
 
 
 # ── 기본 엔드포인트 ───────────────────────────────────────────────
@@ -81,6 +105,11 @@ async def health_check():
             "api_docs": "/docs",
         },
     }
+
+
+# ── 캐시 방지 미들웨어 (모든 라우트 정의 후 래핑) ──────────────────
+_fastapi_app = app
+app = NoCacheMiddleware(_fastapi_app)
 
 
 if __name__ == "__main__":
