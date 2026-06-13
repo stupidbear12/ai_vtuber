@@ -77,7 +77,7 @@ DEFAULT_VOICE_SETTINGS = VoiceSettings(
 )
 
 # ElevenLabs 빌트인 보이스 중 한국어 지원 기본값 (API 키 없을 때 안내용)
-FALLBACK_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+FALLBACK_VOICE_ID = "FGY2WhTYpPnrIDTdsKH5"  # Laura
 
 
 class ElevenLabsEngine:
