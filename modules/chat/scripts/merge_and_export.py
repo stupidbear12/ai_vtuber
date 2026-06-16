@@ -41,7 +41,7 @@ def merge_lora() -> None:
             "finetune.py를 먼저 실행하세요."
         )
 
-    log.info("베이스 모델 CPU 로드 중 (bf16) — RAM 약 16~20 GB 필요...")
+    log.info("베이스 모델 CPU 로드 중 (bf16) - RAM 약 16~20 GB 필요...")
     model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL_ID,
         torch_dtype=torch.bfloat16,

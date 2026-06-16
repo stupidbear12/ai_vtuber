@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 시온(sion) 캐릭터 QLoRA 파인튜닝
-  베이스 모델 : meta-llama/Meta-Llama-3.1-8B-Instruct
-  데이터셋    : emeth_dataset.jsonl  (460개 ShareGPT 대화쌍)
-  GPU 타깃    : RTX 4060 Ti  8 GB VRAM
+  베이스 모델 : unsloth/Meta-Llama-3.1-8B-Instruct
+  데이터셋    : sion_dataset_v2.jsonl  (170,559개 ShareGPT 대화쌍)
+  GPU 타깃    : RTX 4060 Ti  16 GB VRAM
 
 사전 준비:
-  1) conda activate sion_finetune
-  2) huggingface-cli login  (Llama 3.1 라이선스 동의 후 토큰 입력)
+  1) huggingface-cli login  (최초 1회, 모델이 이미 캐시에 있으면 불필요)
      https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct
 
 실행:
@@ -17,39 +16,44 @@
   cd workspace2/ai_vtuber && py modules/chat/scripts/finetune.py
 """
 
+import gc
 import json
 import logging
 import os
 import sys
 from pathlib import Path
 
+# ⚠️ datasets(pyarrow)를 torch보다 먼저 import해야 함
+# torch가 CUDA를 먼저 초기화하면 pyarrow와 메모리 충돌 → 0xC0000005 크래시
+from datasets import Dataset  # noqa: E402 — 반드시 torch보다 먼저
+
 import torch
 
 # ── 경로 ─────────────────────────────────────────────────────────────
 SCRIPT_DIR  = Path(__file__).parent.resolve()
-DATA_PATH   = SCRIPT_DIR.parent / "data" / "emeth_dataset.jsonl"
+DATA_PATH   = SCRIPT_DIR.parent / "data" / "sion_dataset_v2.jsonl"
 OUTPUT_DIR  = SCRIPT_DIR.parent / "output" / "sion-llama31-qlora"
 
 # ── 모델 ─────────────────────────────────────────────────────────────
 BASE_MODEL_ID = "unsloth/Meta-Llama-3.1-8B-Instruct"
 
 # ── QLoRA 하이퍼파라미터 ─────────────────────────────────────────────
-LORA_R       = 16
-LORA_ALPHA   = 32
+LORA_R       = 8        # rank 8로 경량화 (16→8), 학습 파라미터 절반 → 속도/메모리 개선
+LORA_ALPHA   = 16       # alpha = 2*r 유지
 LORA_DROPOUT = 0.05
-# Llama 3.1 8B attention + MLP 레이어 전체 타깃
+# Llama 3.1 8B — attention만 타깃 (MLP 제외로 VRAM 절약)
 LORA_TARGET_MODULES = [
     "q_proj", "k_proj", "v_proj", "o_proj",
-    "gate_proj", "up_proj", "down_proj",
 ]
 
-# ── 학습 하이퍼파라미터  (8 GB VRAM 최적화) ──────────────────────────
-MAX_SEQ_LENGTH = 512    # 긴 시퀀스가 VRAM을 많이 잡음 → 512로 제한
-NUM_EPOCHS     = 3
-BATCH_SIZE     = 1      # per-device; VRAM 안전 마진 확보
-GRAD_ACCUM     = 8      # 실효 배치 크기 = 8
+# ── 학습 하이퍼파라미터  (16 GB VRAM, 4-bit QLoRA 최적화) ───────────
+MAX_SEQ_LENGTH = 512    # 512 토큰으로 제한 → VRAM 절약 + 속도 2배
+NUM_EPOCHS     = 1      # 50K 데이터 1 epoch
+BATCH_SIZE     = 2      # seq_len 절반으로 batch 2 가능
+GRAD_ACCUM     = 4      # 실효 배치 크기 = 8 유지
 LEARNING_RATE  = 2e-4
 WARMUP_RATIO   = 0.05
+MAX_SAMPLES    = 50000  # 50K 핵심 데이터만 사용
 
 # ─────────────────────────────────────────────────────────────────────
 
@@ -72,8 +76,8 @@ def check_environment() -> None:
     name   = torch.cuda.get_device_name(0)
     vram   = torch.cuda.get_device_properties(0).total_memory / 1e9
     log.info(f"GPU: {name}  |  VRAM: {vram:.1f} GB")
-    if vram < 6.5:
-        raise RuntimeError(f"VRAM {vram:.1f} GB 부족 — 최소 8 GB 필요")
+    if vram < 8.0:
+        raise RuntimeError(f"VRAM {vram:.1f} GB 부족 — 최소 8 GB 필요 (권장 16 GB)")
     if not os.environ.get("HF_TOKEN") and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         log.warning(
             "HF_TOKEN 환경변수가 없습니다.\n"
@@ -85,17 +89,31 @@ def check_environment() -> None:
 
 # ── 데이터 ───────────────────────────────────────────────────────────
 
-def load_raw_dataset():
-    from datasets import Dataset
+def load_raw_dataset(max_samples: int = 0):
+    """
+    JSONL 파일을 읽어 HuggingFace Dataset으로 변환.
+    max_samples > 0 이면 해당 수만큼만 로드 (테스트/메모리 절약).
+    """
+    log.info(f"데이터셋 파일: {DATA_PATH} ({DATA_PATH.stat().st_size / 1e6:.1f} MB)")
 
     records = []
     with open(DATA_PATH, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    log.info(f"데이터셋 로드 완료: {len(records)} 개")
-    return Dataset.from_list(records)
+            if not line:
+                continue
+            records.append(json.loads(line))
+            if max_samples > 0 and len(records) >= max_samples:
+                break
+
+    log.info(f"JSON 로드 완료: {len(records)} 개")
+
+    ds = Dataset.from_list(records)
+    del records
+    gc.collect()
+
+    log.info(f"Dataset 변환 완료: {len(ds)} 개")
+    return ds
 
 
 def preprocess(dataset, tokenizer):
@@ -211,33 +229,7 @@ def apply_qlora(model):
 # ── 학습 ─────────────────────────────────────────────────────────────
 
 def run_training(model, tokenizer, dataset) -> Path:
-    from transformers import TrainingArguments
-
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    training_args = TrainingArguments(
-        output_dir=str(OUTPUT_DIR),
-        num_train_epochs=NUM_EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRAD_ACCUM,
-        learning_rate=LEARNING_RATE,
-        warmup_ratio=WARMUP_RATIO,
-        lr_scheduler_type="cosine",
-        # 메모리 최적화
-        bf16=True,                             # RTX 4060 Ti bfloat16 지원
-        tf32=True,                             # Ada Lovelace TF32 최적화
-        optim="paged_adamw_8bit",              # paged optimizer로 VRAM 절약
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-        dataloader_pin_memory=False,
-        # 체크포인트 & 로깅
-        logging_steps=10,
-        save_steps=50,
-        save_total_limit=2,
-        load_best_model_at_end=False,
-        report_to="none",
-        remove_unused_columns=False,
-    )
 
     from trl import SFTTrainer, SFTConfig
 
@@ -255,13 +247,13 @@ def run_training(model, tokenizer, dataset) -> Path:
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         dataloader_pin_memory=False,
-        logging_steps=10,
-        save_steps=50,
+        logging_steps=50,
+        save_steps=500,
         save_total_limit=2,
         load_best_model_at_end=False,
         report_to="none",
         remove_unused_columns=True,
-        max_seq_length=MAX_SEQ_LENGTH,
+        max_length=MAX_SEQ_LENGTH,
         dataset_text_field="text",
         packing=False,
     )
@@ -273,14 +265,16 @@ def run_training(model, tokenizer, dataset) -> Path:
         processing_class=tokenizer,
     )
 
-    total_steps = len(trainer.get_train_dataloader()) * NUM_EPOCHS
+    optimizer_steps = len(dataset) // (BATCH_SIZE * GRAD_ACCUM) * NUM_EPOCHS
+    est_sec_per_step = 4  # RTX 4060 Ti, seq512, batch2 기준 ~4초/스텝
+    est_hours = optimizer_steps * est_sec_per_step / 3600
     log.info("=" * 60)
     log.info(f"파인튜닝 시작")
     log.info(f"  샘플 수     : {len(dataset)}")
     log.info(f"  에폭        : {NUM_EPOCHS}")
     log.info(f"  실효 배치   : {BATCH_SIZE * GRAD_ACCUM}")
-    log.info(f"  총 스텝     : {total_steps}")
-    log.info(f"  예상 시간   : {total_steps * 25 // 60}~{total_steps * 35 // 60} 분 (RTX 4060 Ti 기준)")
+    log.info(f"  optimizer 스텝: {optimizer_steps}")
+    log.info(f"  예상 시간   : {est_hours:.1f} 시간 (RTX 4060 Ti 16GB 기준)")
     log.info("=" * 60)
 
     trainer.train()
@@ -295,10 +289,16 @@ def run_training(model, tokenizer, dataset) -> Path:
 # ── 메인 ─────────────────────────────────────────────────────────────
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--samples", type=int, default=MAX_SAMPLES,
+                        help=f"사용할 샘플 수 (기본값: {MAX_SAMPLES}, 0=전체)")
+    args = parser.parse_args()
+
     check_environment()
 
     log.info("[1/4] 데이터셋 로드")
-    dataset = load_raw_dataset()
+    dataset = load_raw_dataset(max_samples=args.samples)
 
     log.info("[2/4] 모델 로드 (4-bit NF4 양자화)")
     model, tokenizer = load_model_4bit(BASE_MODEL_ID)
@@ -324,4 +324,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log.error(f"파인튜닝 실패: {e}", exc_info=True)
+        sys.exit(1)
