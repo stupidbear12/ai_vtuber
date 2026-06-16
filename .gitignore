@@ -42,6 +42,20 @@ merge_log.txt
 merge_err.txt
 *.gguf
 
+# 대용량 데이터셋 / 학습 데이터 (git-lfs 별도 관리)
+modules/chat/data/*.jsonl
+modules/chat/data/chroma_db/
+
+# ACE-Step 모델 디렉토리 (대용량 바이너리)
+ACE-Step-1.5/
+
+# music 모듈 생성 캐시
+modules/music/output/
+
+# 임시 테스트 파일
+test_*.mp3
+test_*.wav
+
 # 로그 파일
 *.log
 logs_*.txt
