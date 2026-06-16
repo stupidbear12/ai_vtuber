@@ -1,0 +1,27 @@
+# ai_music 모듈 의존성
+# pip install -r modules/music/requirements.txt
+
+# === 서버 ===
+fastapi>=0.104
+uvicorn[standard]>=0.24
+websockets>=12.0
+pydantic>=2.0
+
+# === 오디오 처리 ===
+numpy>=1.24
+soundfile>=0.12          # wav/flac 읽기/쓰기
+pydub>=0.25              # mp3 변환, 오디오 조작
+librosa>=0.10            # BPM 분석, 타임스트레칭
+scipy>=1.11              # FFT, 신호 처리
+
+# === ACE-Step 1.5 ===
+# git clone https://github.com/ace-step/ACE-Step-1.5
+# cd ACE-Step-1.5 && pip install -e .
+# 또는 pip install acestep (PyPI 등록 시)
+
+# === GPU ===
+torch>=2.0               # CUDA 지원 버전
+torchaudio>=2.0
+
+# === HTTP 클라이언트 (ACE-Step REST API 호출) ===
+aiohttp>=3.9
