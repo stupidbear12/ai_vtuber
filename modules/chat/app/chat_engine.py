@@ -12,6 +12,8 @@ app/chat_engine.py — 시온(sion) 캐릭터 채팅 엔진
 """
 
 import asyncio
+import importlib.util
+import os
 import re
 import logging
 from typing import Optional
@@ -20,13 +22,20 @@ from app.llm_provider import generate_text
 
 logger = logging.getLogger(__name__)
 
-# RAG 활성화 여부 — chromadb/sentence-transformers 없으면 자동 비활성화
-_RAG_ENABLED = False
-try:
-    from app.memory import get_memory_engine
-    _RAG_ENABLED = True
-except ImportError:
-    logger.warning("[ChatEngine] RAG 의존 패키지 없음 — 기억 기능 비활성화")
+
+# RAG 활성화 여부 — 환경변수 또는 패키지 부재 시 비활성화
+# 주의: 여기서 app.memory나 chromadb를 import하면
+# 이벤트 루프를 블로킹하는 heavy import 체인이 발생한다.
+# 실제 import는 함수 내에서만 수행한다.
+def _is_rag_enabled() -> bool:
+    """RAG 사용 가능 여부를 확인한다 (실제 heavy import 없이)."""
+    if os.environ.get("CHAT_DISABLE_RAG", "").lower() in ("1", "true", "yes"):
+        return False
+    return (
+        importlib.util.find_spec("chromadb") is not None
+        and importlib.util.find_spec("sentence_transformers") is not None
+    )
+
 
 # 감정 태그 파싱 정규식 — LLM 응답 맨 앞의 [감정:태그] 형식 추출
 _EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
@@ -116,10 +125,11 @@ async def _build_rag_context(message: str, mode: str) -> str:
 
     방송 모드는 속도 우선이므로 검색 타임아웃을 짧게 설정한다.
     """
-    if not _RAG_ENABLED:
+    if not _is_rag_enabled():
         return ""
 
     try:
+        from app.memory import get_memory_engine
         memory = get_memory_engine()
 
         # 방송 모드: 1초, 펫 모드: 2초 타임아웃
@@ -238,8 +248,9 @@ async def generate_reply(
         emotion = "calm"
 
     # RAG: 오류 없이 성공한 대화만 기억에 저장 (응답을 블로킹하지 않음)
-    if not error_msg and _RAG_ENABLED:
+    if not error_msg and _is_rag_enabled():
         try:
+            from app.memory import get_memory_engine
             memory = get_memory_engine()
             asyncio.create_task(
                 memory.save_conversation(message, text, mode, viewer_name)

@@ -23,8 +23,9 @@ API 엔드포인트:
     GET  /memory/stats  — RAG 메모리 현황 (디버그용)
 """
 
-import asyncio
+import importlib.util
 import logging
+import os
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -45,7 +46,24 @@ from app.llm_provider import get_provider_config
 logger = logging.getLogger(__name__)
 
 
-# ── 서버 수명주기 ─────────────────────────────────────────────────
+# ── 헬퍼 ─────────────────────────────────────────────────────────────
+
+def _is_rag_available() -> bool:
+    """RAG 기능 사용 가능 여부 확인.
+
+    실제 import 없이 모듈 존재 여부만 확인한다.
+    chromadb/sentence_transformers import는 GIL을 수 초간 점유하므로
+    이벤트 루프 스레드에서 절대 실행하면 안 된다.
+    """
+    if os.environ.get("CHAT_DISABLE_RAG", "").lower() in ("1", "true", "yes"):
+        return False
+    return (
+        importlib.util.find_spec("chromadb") is not None
+        and importlib.util.find_spec("sentence_transformers") is not None
+    )
+
+
+# ── 서버 수명주기 ─────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,27 +72,35 @@ async def lifespan(app: FastAPI):
     시작 시: RAG 메모리 엔진을 초기화하고 지식 베이스를 백그라운드로 로드한다.
     로드가 완료되기 전에도 서버는 정상 응답하며, 로드 후 RAG가 활성화된다.
     """
-    try:
-        from app.memory import get_memory_engine
-
-        async def _load_knowledge():
-            engine = get_memory_engine()
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, engine.load_knowledge_docs)
-            logger.info("[Main] RAG 지식 베이스 로드 완료")
-
-        # 백그라운드 로드 — 서버 시작을 블로킹하지 않음
-        asyncio.create_task(_load_knowledge())
-        logger.info("[Main] RAG 메모리 엔진 초기화 시작 (백그라운드)")
-    except ImportError:
+    if os.environ.get("CHAT_DISABLE_RAG", "").lower() in ("1", "true", "yes"):
+        logger.info("[Main] CHAT_DISABLE_RAG=1 — RAG 메모리 비활성화")
+    elif not _is_rag_available():
         logger.warning("[Main] RAG 패키지 없음 — 기억 기능 없이 실행")
-    except Exception as e:
-        logger.warning(f"[Main] RAG 초기화 실패 (기억 기능 비활성화): {e}")
+    else:
+        # 지식 베이스 로드를 별도 스레드에서 실행한다.
+        # 중요: chromadb/sentence_transformers의 import는 GIL을 오래 점유하므로
+        # asyncio 이벤트 루프(run_in_executor 포함)가 아닌
+        # 순수 threading.Thread에서만 수행해야 한다.
+        import threading
+
+        def _load_knowledge_thread():
+            """별도 스레드에서 RAG 지식 베이스를 로드한다 (이벤트 루프 미사용)."""
+            try:
+                from app.memory import get_memory_engine
+                engine = get_memory_engine()
+                engine.load_knowledge_docs()
+                logger.info("[Main] RAG 지식 베이스 로드 완료")
+            except Exception as e:
+                logger.warning(f"[Main] RAG 초기화 실패 (기억 기능 비활성화): {e}")
+
+        t = threading.Thread(target=_load_knowledge_thread, daemon=True)
+        t.start()
+        logger.info("[Main] RAG 메모리 엔진 초기화 시작 (백그라운드 스레드)")
 
     yield  # 서버 실행 중
 
 
-# ── FastAPI 앱 생성 ───────────────────────────────────────────────
+# ── FastAPI 앱 생성 ───────────────────────────────────────────────────────
 app = FastAPI(
     title="ai_chat — 시온 채팅 엔진",
     description=(
@@ -85,7 +111,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS 미들웨어 ─────────────────────────────────────────────────
+# ── CORS 미들웨어 ─────────────────────────────────────────────────────────
 # ai_vtuber_core, ai_broadcast, ai_live2d에서 호출 가능하도록 허용
 app.add_middleware(
     CORSMiddleware,
@@ -95,7 +121,7 @@ app.add_middleware(
 )
 
 
-# ── 요청/응답 모델 ────────────────────────────────────────────────
+# ── 요청/응답 모델 ────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     """채팅 요청 모델."""
@@ -112,7 +138,7 @@ class ChatResponse(BaseModel):
     error: Optional[str] = None
 
 
-# ── 엔드포인트 ───────────────────────────────────────────────────
+# ── 엔드포인트 ─────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def root():
@@ -200,18 +226,6 @@ async def chat(req: ChatRequest):
     )
 
     return ChatResponse(**result)
-
-
-# ── 헬퍼 ─────────────────────────────────────────────────────────
-
-def _is_rag_available() -> bool:
-    """RAG 기능 사용 가능 여부 확인."""
-    try:
-        import chromadb  # noqa: F401
-        import sentence_transformers  # noqa: F401
-        return True
-    except ImportError:
-        return False
 
 
 if __name__ == "__main__":
