@@ -145,7 +145,7 @@ async def run_chat_pipeline(
             async with session.post(
                 f"{cfg.chat_url()}/chat",
                 json={"message": message, "mode": mode},
-                timeout=aiohttp.ClientTimeout(total=15.0),
+                timeout=aiohttp.ClientTimeout(total=60.0),
             ) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"ai_chat 응답 오류: HTTP {resp.status}")

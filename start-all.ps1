@@ -105,7 +105,7 @@ foreach ($mod in $modules) {
 
     $uvicornArgs = $pyArgsPrefix + @(
         "-m", "uvicorn", "app.main:app",
-        "--reload", "--host", "0.0.0.0", "--port", "$($mod.Port)"
+        "--host", "0.0.0.0", "--port", "$($mod.Port)"
     )
 
     Write-Host "  starting $($mod.Name) (:$($mod.Port))" -ForegroundColor Gray
