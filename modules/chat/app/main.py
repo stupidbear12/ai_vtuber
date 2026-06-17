@@ -51,16 +51,12 @@ logger = logging.getLogger(__name__)
 def _is_rag_available() -> bool:
     """RAG 기능 사용 가능 여부 확인.
 
-    실제 import 없이 모듈 존재 여부만 확인한다.
-    chromadb/sentence_transformers import는 GIL을 수 초간 점유하므로
-    이벤트 루프 스레드에서 절대 실행하면 안 된다.
+    CHAT_DISABLE_RAG=1 이면 비활성화.
+    chromadb 패키지가 설치되어 있어야 활성화 (HTTP 클라이언트로 Docker ChromaDB에 연결).
     """
     if os.environ.get("CHAT_DISABLE_RAG", "").lower() in ("1", "true", "yes"):
         return False
-    return (
-        importlib.util.find_spec("chromadb") is not None
-        and importlib.util.find_spec("sentence_transformers") is not None
-    )
+    return importlib.util.find_spec("chromadb") is not None
 
 
 # ── 서버 수명주기 ─────────────────────────────────────────────────────────

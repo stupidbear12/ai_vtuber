@@ -14,6 +14,24 @@
 
 services:
 
+  # ── ChromaDB 벡터 DB (RAG 메모리) ────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: ai_chromadb
+    ports:
+      - "8010:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   # ── Live2D 아바타 서버 ─────────────────────────────────────────
   ai_live2d:
     build:
@@ -44,8 +62,13 @@ services:
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-sion}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CHAT_DISABLE_RAG=${CHAT_DISABLE_RAG:-0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - chromadb
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
@@ -125,3 +148,7 @@ services:
 networks:
   default:
     name: ai_vtuber_network
+
+volumes:
+  chromadb_data:
+    name: ai_vtuber_chromadb_data

@@ -31,10 +31,7 @@ def _is_rag_enabled() -> bool:
     """RAG 사용 가능 여부를 확인한다 (실제 heavy import 없이)."""
     if os.environ.get("CHAT_DISABLE_RAG", "").lower() in ("1", "true", "yes"):
         return False
-    return (
-        importlib.util.find_spec("chromadb") is not None
-        and importlib.util.find_spec("sentence_transformers") is not None
-    )
+    return importlib.util.find_spec("chromadb") is not None
 
 
 # 감정 태그 파싱 정규식 — LLM 응답 맨 앞의 [감정:태그] 형식 추출
