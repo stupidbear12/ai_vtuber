@@ -469,9 +469,10 @@ class BroadcastChatManager:
     """치지직/유튜브 채팅 수집 + ai_chat + ai_voice TTS + ai_live2d 파이프라인.
 
     처리 흐름:
-      1. 채팅 수집 (치지직 WebSocket / 유튜브 pytchat)
+      1. 채팅 수집 (치지직 공식 Session API 또는 비공식 WebSocket / 유튜브 pytchat)
       2. 채팅 선별 (키워드, 후원, 랜덤 확률)
       3. ai_chat POST /chat → 시온 응답 + 감정 태그
+      3.5. Chzzk 채팅창에 시온 응답 전송 (공식 API, 선택)
       4. ai_voice POST /voice/tts → TTS 음성 (MP3)
       5. ai_live2d POST /live2d/emotion → 표정 변경
     """
@@ -481,12 +482,14 @@ class BroadcastChatManager:
         chat_url: str = "http://localhost:8002",
         live2d_url: str = "http://localhost:8001",
         voice_url: str = "http://localhost:8004",
+        chzzk_client=None,
     ):
         """
         Args:
             chat_url: ai_chat 서버 URL (기본: http://localhost:8002)
             live2d_url: ai_live2d 서버 URL (기본: http://localhost:8001)
             voice_url: ai_voice 서버 URL (기본: http://localhost:8004)
+            chzzk_client: ChzzkClient 인스턴스 (공식 API 사용 시). None이면 비공식 사용.
         """
         # 환경변수로 URL 오버라이드 가능
         self._chat_url = os.environ.get("AI_CHAT_URL", chat_url).rstrip("/")
@@ -495,6 +498,9 @@ class BroadcastChatManager:
         self._voice_enabled = os.environ.get(
             "BROADCAST_VOICE_ENABLED", "true"
         ).lower() in ("true", "1", "yes")
+
+        # 공식 Chzzk API 클라이언트 (Access Token이 있을 때만 유효)
+        self._chzzk_client = chzzk_client
 
         self._buffer = ChatBuffer()
         self._filter = ChatFilter()
@@ -621,6 +627,19 @@ class BroadcastChatManager:
             f"{msg.message[:30]} → [{emotion}] {reply_text[:50]}"
         )
 
+        # ── Step 2.5: Chzzk 채팅창에 시온 응답 전송 (공식 API) ─────
+        if (
+            self._chzzk_client
+            and self._platform == "chzzk"
+            and reply_text
+            and self._chzzk_client.has_token()
+        ):
+            try:
+                await self._chzzk_client.send_chat(reply_text[:100])
+                logger.debug(f"[ChatManager] Chzzk 채팅 전송 완료: {reply_text[:30]!r}")
+            except Exception as e:
+                logger.warning(f"[ChatManager] Chzzk 채팅 전송 실패 (무시): {e}")
+
         # ── Step 3: ai_voice TTS 음성 생성 (선택) ─────────────────
         audio_base64: Optional[str] = None
         if self._voice_enabled and reply_text:
@@ -713,7 +732,14 @@ class BroadcastChatManager:
         if platform == "youtube":
             self._collector = YouTubeChatCollector(channel_id, self._on_chat)
         else:
-            self._collector = ChzzkChatCollector(channel_id, self._on_chat)
+            # 공식 Access Token이 있으면 Session API 사용, 없으면 비공식 WebSocket 폴백
+            if self._chzzk_client and self._chzzk_client.has_token():
+                from app.chzzk_session import ChzzkOfficialChatCollector
+                self._collector = ChzzkOfficialChatCollector(self._chzzk_client, self._on_chat)
+                logger.info("[ChatManager] 치지직 공식 Session API 수집기 사용")
+            else:
+                self._collector = ChzzkChatCollector(channel_id, self._on_chat)
+                logger.info("[ChatManager] 치지직 비공식 WebSocket 수집기 사용 (Access Token 없음)")
 
         # 수집 태스크와 응답 워커 태스크를 동시에 시작
         self._collect_task = asyncio.create_task(self._collector.start())
@@ -771,4 +797,5 @@ class BroadcastChatManager:
             "live2d_url": self._live2d_url,
             "voice_url": self._voice_url,
             "voice_enabled": self._voice_enabled,
+            "chzzk_official_api": bool(self._chzzk_client and self._chzzk_client.has_token()),
         }

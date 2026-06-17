@@ -4,3 +4,4 @@ aiohttp>=3.9.0
 python-dotenv>=1.0.0
 pytchat>=0.5.5
 websockets>=11.0
+python-socketio>=5.8.0
