@@ -606,6 +606,7 @@ class BroadcastChatManager:
                     "message": current,
                     "mode": "broadcast",
                     "context": chat_context if chat_context else None,
+                    "viewer_name": msg.author,
                 }
                 async with session.post(
                     f"{self._chat_url}/chat",

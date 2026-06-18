@@ -1,0 +1,13 @@
+# sion-chat (파인튜닝 GGUF) 기반 — 시스템 프롬프트는 chat_engine.py에서 전달
+# SYSTEM을 빈 문자열로 설정해 sion-chat의 기존 SYSTEM 상속을 제거
+FROM sion-chat
+
+SYSTEM ""
+
+PARAMETER temperature    0.8
+PARAMETER top_p          0.9
+PARAMETER top_k          40
+PARAMETER repeat_penalty 1.1
+PARAMETER num_ctx        4096
+PARAMETER stop           "<|eot_id|>"
+PARAMETER stop           "<|end_of_text|>"

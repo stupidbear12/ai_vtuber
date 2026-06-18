@@ -242,6 +242,10 @@ async def generate_reply(
     else:
         user_prompt = message
 
+    # 방송 모드: 시청자 닉네임을 프롬프트에 포함 → 모델이 이름으로 불러줌
+    if viewer_name and mode == "broadcast":
+        user_prompt += f"\n\n(이 채팅을 보낸 시청자 닉네임: {viewer_name})"
+
     if rag_context:
         user_prompt = f"{rag_context}\n\n{user_prompt}"
 

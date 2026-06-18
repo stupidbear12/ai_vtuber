@@ -1,0 +1,13 @@
+# 시온(sion) Ollama Modelfile — exaone3.5:7.8b 베이스 (LG AI Research, 한국어 특화)
+# 사용법: ollama create sion -f modules/chat/scripts/Modelfile.base
+#
+# SYSTEM 프롬프트는 chat_engine.py에서 messages API로 전달하므로
+# 여기서는 생성 파라미터만 설정한다.
+
+FROM exaone3.5:7.8b
+
+PARAMETER temperature    0.8
+PARAMETER top_p          0.9
+PARAMETER top_k          40
+PARAMETER repeat_penalty 1.2
+PARAMETER num_ctx        4096
