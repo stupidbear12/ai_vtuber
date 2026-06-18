@@ -610,7 +610,7 @@ class BroadcastChatManager:
                 async with session.post(
                     f"{self._chat_url}/chat",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10.0),
+                    timeout=aiohttp.ClientTimeout(total=60.0),  # Ollama 응답 대기
                 ) as resp:
                     if resp.status != 200:
                         raise RuntimeError(f"ai_chat 응답 오류: HTTP {resp.status}")

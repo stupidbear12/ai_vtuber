@@ -45,6 +45,32 @@ class ChzzkClient:
         """Access Token 보유 여부 (토큰 매니저에 위임)."""
         return self._tm.has_token()
 
+    def _client_headers(self) -> dict:
+        """Client 인증 헤더 (Client-Id + Client-Secret). Access Token 불필요 엔드포인트용."""
+        return {
+            "Client-Id": self._tm.client_id,
+            "Client-Secret": self._tm.client_secret,
+            "Content-Type": "application/json",
+        }
+
+    async def _get_client_auth(self, path: str) -> dict:
+        """Client 인증으로 GET 요청 (Bearer 토큰 없이)."""
+        headers = self._client_headers()
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{CHZZK_BASE_URL}{path}",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10.0),
+            ) as r:
+                text = await r.text()
+                logger.info(f"[ChzzkAPI] _get_client_auth {path} → HTTP {r.status}, raw={text[:500]}")
+                if r.status != 200:
+                    raise RuntimeError(f"GET {path} 실패 (HTTP {r.status}): {text}")
+                data = json.loads(text)
+        content = data.get("content") or data
+        logger.info(f"[ChzzkAPI] _get_client_auth {path} → content keys={list(content.keys()) if isinstance(content, dict) else type(content)}")
+        return content
+
     async def _get(self, path: str) -> dict:
         headers = await self._headers()
         async with aiohttp.ClientSession() as s:
@@ -66,6 +92,22 @@ class ChzzkClient:
                 f"{CHZZK_BASE_URL}{path}",
                 headers=headers,
                 json=payload,
+                timeout=aiohttp.ClientTimeout(total=10.0),
+            ) as r:
+                text = await r.text()
+                if r.status != 200:
+                    raise RuntimeError(f"POST {path} 실패 (HTTP {r.status}): {text}")
+                data = json.loads(text)
+        return data.get("content") or data
+
+    async def _post_query(self, path: str, params: dict) -> dict:
+        """POST 요청 — payload를 Query Parameter로 전송 (치지직 Session 이벤트 구독용)."""
+        headers = await self._headers()
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{CHZZK_BASE_URL}{path}",
+                headers=headers,
+                params=params,
                 timeout=aiohttp.ClientTimeout(total=10.0),
             ) as r:
                 text = await r.text()
@@ -214,8 +256,12 @@ class ChzzkClient:
         return (content or {}).get("data", []) if isinstance(content, dict) else []
 
     async def subscribe_chat(self, session_key: str) -> dict:
-        """채팅 이벤트 구독 (POST /open/v1/sessions/events/subscribe/chat)."""
-        content = await self._post(
+        """채팅 이벤트 구독 (POST /open/v1/sessions/events/subscribe/chat).
+
+        NOTE: 치지직 Session API는 sessionKey를 Query Parameter로 전달해야 한다.
+        JSON body로 보내면 400 에러 발생.
+        """
+        content = await self._post_query(
             "/open/v1/sessions/events/subscribe/chat",
             {"sessionKey": session_key},
         )
@@ -224,7 +270,7 @@ class ChzzkClient:
 
     async def subscribe_donation(self, session_key: str) -> dict:
         """후원 이벤트 구독 (POST /open/v1/sessions/events/subscribe/donation)."""
-        content = await self._post(
+        content = await self._post_query(
             "/open/v1/sessions/events/subscribe/donation",
             {"sessionKey": session_key},
         )
@@ -233,9 +279,21 @@ class ChzzkClient:
 
     async def subscribe_subscription(self, session_key: str) -> dict:
         """구독 알림 이벤트 구독 (POST /open/v1/sessions/events/subscribe/subscription)."""
-        content = await self._post(
+        content = await self._post_query(
             "/open/v1/sessions/events/subscribe/subscription",
             {"sessionKey": session_key},
         )
         logger.info("[ChzzkAPI] 구독 알림 이벤트 구독 완료")
         return content or {}
+
+    async def get_live_status(self) -> dict:
+        """내 채널 방송 상태 조회.
+
+        NOTE: 치지직 공식 API에 '내 채널 라이브 여부' 전용 엔드포인트가 없으므로
+        자동 감지가 불가능하다. 항상 is_live=False를 반환하며,
+        방송 시작/종료는 수동(/broadcast/start, /broadcast/stop)으로 관리한다.
+
+        Returns:
+            {"is_live": False}
+        """
+        return {"is_live": False}

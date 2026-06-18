@@ -25,7 +25,7 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
-CHZZK_BASE_URL = "https://api.chzzk.naver.com"
+CHZZK_BASE_URL = "https://openapi.chzzk.naver.com"
 CHZZK_AUTH_PAGE = "https://chzzk.naver.com/account-interlock"
 
 TOKEN_FILE = Path(__file__).parent / "chzzk_tokens.json"

@@ -92,12 +92,27 @@ class ChzzkOfficialChatCollector:
 
         @sio.on("SYSTEM")
         async def on_system(data):
-            event_type = (data or {}).get("type", "") if isinstance(data, dict) else ""
-            logger.debug(f"[ChzzkOfficial] SYSTEM 이벤트: {event_type}")
+            # 치지직 Session API는 SYSTEM 이벤트 데이터를 JSON 문자열로 전송
+            parsed = data
+            if isinstance(data, str):
+                try:
+                    parsed = json.loads(data)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = {}
+            if not isinstance(parsed, dict):
+                parsed = {}
+
+            event_type = parsed.get("type", "")
+            logger.info(f"[ChzzkOfficial] SYSTEM 이벤트: type={event_type}, data={parsed}")
 
             if event_type == "connected":
-                # 연결 완료 후 세션 키를 조회하고 이벤트 구독
-                await self._subscribe_all_events()
+                # 세션 키가 이벤트 데이터에 포함되어 있으면 바로 사용
+                session_key = (parsed.get("data") or {}).get("sessionKey", "")
+                if session_key:
+                    await self._subscribe_with_key(session_key)
+                else:
+                    # 폴백: API로 세션 키 조회
+                    await self._subscribe_all_events()
 
         @sio.on("CHAT")
         async def on_chat(data):
@@ -132,6 +147,17 @@ class ChzzkOfficialChatCollector:
         if sio.connected:
             await sio.disconnect()
 
+    async def _subscribe_with_key(self, session_key: str) -> None:
+        """주어진 세션 키로 채팅/후원/구독 이벤트를 모두 구독."""
+        try:
+            logger.info(f"[ChzzkOfficial] 세션 키 {session_key[:12]}... 로 이벤트 구독 시작")
+            await self._client.subscribe_chat(session_key)
+            await self._client.subscribe_donation(session_key)
+            await self._client.subscribe_subscription(session_key)
+            logger.info("[ChzzkOfficial] 채팅/후원/구독 이벤트 구독 완료")
+        except Exception as e:
+            logger.error(f"[ChzzkOfficial] 이벤트 구독 실패: {e}")
+
     async def _subscribe_all_events(self) -> None:
         """활성 세션 키를 조회 후 채팅/후원/구독 이벤트를 모두 구독."""
         try:
@@ -139,11 +165,7 @@ class ChzzkOfficialChatCollector:
             if not session_key:
                 logger.warning("[ChzzkOfficial] 활성 세션 키를 찾지 못했습니다.")
                 return
-
-            await self._client.subscribe_chat(session_key)
-            await self._client.subscribe_donation(session_key)
-            await self._client.subscribe_subscription(session_key)
-            logger.info("[ChzzkOfficial] 채팅/후원/구독 이벤트 구독 완료")
+            await self._subscribe_with_key(session_key)
         except Exception as e:
             logger.error(f"[ChzzkOfficial] 이벤트 구독 실패: {e}")
 
@@ -161,7 +183,16 @@ class ChzzkOfficialChatCollector:
     def _dispatch(self, data, is_donation: bool) -> None:
         """수신 이벤트를 ChatMessage로 변환해 콜백 호출."""
         try:
-            items = data if isinstance(data, list) else ([data] if data else [])
+            # 치지직 Session API는 데이터를 JSON 문자열로 보낼 수 있음
+            parsed = data
+            if isinstance(parsed, str):
+                try:
+                    parsed = json.loads(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    logger.debug(f"[ChzzkOfficial] JSON 파싱 불가: {data[:100]}")
+                    return
+
+            items = parsed if isinstance(parsed, list) else ([parsed] if parsed else [])
             for item in items:
                 if isinstance(item, dict):
                     self._dispatch_single(item, is_donation)
@@ -169,22 +200,35 @@ class ChzzkOfficialChatCollector:
             logger.debug(f"[ChzzkOfficial] 이벤트 파싱 오류: {e}")
 
     def _dispatch_single(self, item: dict, is_donation: bool) -> None:
-        """단일 이벤트 항목 파싱."""
-        # ChatMessage를 런타임에 import (circular import 방지)
+        """단일 이벤트 항목 파싱.
+
+        공식 Session API 이벤트 필드:
+          - CHAT: profile(Object), content(String), senderChannelId, ...
+          - DONATION: donatorNickname, donationText, payAmount, ...
+          - SUBSCRIPTION: subscriberNickname, ...
+        """
         from app.chat_collector import ChatMessage
 
-        profile_raw = item.get("profile", "{}")
-        try:
-            profile = (
-                json.loads(profile_raw)
-                if isinstance(profile_raw, str)
-                else (profile_raw or {})
-            )
-        except Exception:
-            profile = {}
+        if is_donation:
+            # 후원 이벤트: donatorNickname, donationText
+            nickname = item.get("donatorNickname") or "익명"
+            text = item.get("donationText", "")
+            if not text and not item.get("payAmount"):
+                # 구독 이벤트: subscriberNickname
+                nickname = item.get("subscriberNickname") or "시청자"
+                text = f"구독 알림 (Tier {item.get('tierNo', '?')})"
+        else:
+            # 채팅 이벤트: profile은 Object(dict), 메시지는 content 필드
+            profile = item.get("profile") or {}
+            if isinstance(profile, str):
+                try:
+                    profile = json.loads(profile)
+                except Exception:
+                    profile = {}
+            nickname = (profile or {}).get("nickname", "시청자")
+            # 공식 API는 'content' 필드, 비공식은 'msg' 필드
+            text = item.get("content") or item.get("message") or item.get("msg", "")
 
-        nickname = profile.get("nickname", "시청자")
-        text = item.get("message") or item.get("msg", "")
         if not text:
             return
 
