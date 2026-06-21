@@ -125,6 +125,7 @@ class ChatRequest(BaseModel):
     mode: Optional[str] = "pet"           # "pet" 또는 "broadcast"
     context: Optional[str] = None         # 방송 모드 채팅 히스토리 (선택)
     viewer_name: Optional[str] = None     # 방송 모드 시청자 닉네임 (선택)
+    is_donation: Optional[bool] = False   # 후원/도네이션 여부 (Gemini 라우팅용)
 
 
 class ChatResponse(BaseModel):
@@ -219,6 +220,7 @@ async def chat(req: ChatRequest):
         mode=mode,
         context=req.context,
         viewer_name=req.viewer_name,
+        is_donation=req.is_donation or False,
     )
 
     return ChatResponse(**result)

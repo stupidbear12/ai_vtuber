@@ -205,6 +205,7 @@ async def generate_reply(
     mode: str = "pet",
     context: Optional[str] = None,
     viewer_name: Optional[str] = None,
+    is_donation: bool = False,
 ) -> dict:
     """Ollama를 호출해 시온 캐릭터 응답을 생성한다.
 
@@ -254,10 +255,11 @@ async def generate_reply(
             system_prompt=_get_system_prompt(mode),
             user_prompt=user_prompt,
             mode=mode,
+            is_donation=is_donation,
         )
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"[ChatEngine] Ollama 호출 실패: {e}")
+        logger.error(f"[ChatEngine] LLM 호출 실패: {e}")
         if "404" in error_msg or "not found" in error_msg.lower():
             from app.llm_provider import get_provider_config
             cfg = get_provider_config()
