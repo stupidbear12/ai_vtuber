@@ -34,8 +34,12 @@ def _is_rag_enabled() -> bool:
     return importlib.util.find_spec("chromadb") is not None
 
 
-# 감정 태그 파싱 정규식 — LLM 응답 맨 앞의 [감정:태그] 형식 추출
-_EMOTION_RE = re.compile(r"^\[감정:(\w+)\]\s*")
+# 감정 태그 파싱 정규식
+# Ollama: [감정:happy], Gemini: [happy] 두 형식 모두 지원
+_EMOTION_TAG_RE = re.compile(r"\[(?:감정:)?(\w+)\]")
+# 앞부분의 모든 감정 태그를 제거하는 정규식 (이중 출력 대응)
+_EMOTION_STRIP_RE = re.compile(r"^(\s*\[(?:감정:)?\w+\]\s*)+")
+
 
 # 지원하는 감정 태그 목록 (Live2D 표정과 매핑됨)
 VALID_EMOTIONS = {
@@ -271,11 +275,15 @@ async def generate_reply(
             text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
 
     # [감정:태그] 파싱 — 텍스트 앞부분에서 태그 추출 후 제거
+    # Gemini 등에서 [감정:calm] [감정:happy] 이중 출력 시 마지막 태그 사용
     emotion = "calm"
-    m = _EMOTION_RE.match(text)
-    if m:
-        emotion = m.group(1)
-        text = text[m.end():]
+    strip_m = _EMOTION_STRIP_RE.match(text)
+    if strip_m:
+        matched_prefix = strip_m.group(0)
+        all_tags = _EMOTION_TAG_RE.findall(matched_prefix)
+        if all_tags:
+            emotion = all_tags[-1]  # 마지막 태그 사용
+        text = text[strip_m.end():]
 
     # 유효하지 않은 감정 태그는 calm으로 폴백
     if emotion not in VALID_EMOTIONS:

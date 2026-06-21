@@ -92,8 +92,8 @@ async def _generate_ollama(
 def _gemini_generation_config(mode: str) -> dict:
     """모드별 Gemini 생성 파라미터."""
     if mode == "broadcast":
-        return {"temperature": 0.8, "maxOutputTokens": 300}
-    return {"temperature": 0.7, "maxOutputTokens": 800}
+        return {"temperature": 0.8, "maxOutputTokens": 500}
+    return {"temperature": 0.7, "maxOutputTokens": 1000}
 
 
 async def _generate_gemini(
@@ -109,6 +109,10 @@ async def _generate_gemini(
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
     url = f"{_GEMINI_BASE}/models/{model}:generateContent"
 
+    gen_config = _gemini_generation_config(mode)
+    # Gemini 2.5 Flash thinking 예산 제한 — 실제 응답에 집중
+    gen_config["thinkingConfig"] = {"thinkingBudget": 128}
+
     payload = {
         "contents": [
             {"role": "user", "parts": [{"text": user_prompt}]},
@@ -116,7 +120,7 @@ async def _generate_gemini(
         "systemInstruction": {
             "parts": [{"text": system_prompt}],
         },
-        "generationConfig": _gemini_generation_config(mode),
+        "generationConfig": gen_config,
     }
 
     headers = {
