@@ -42,7 +42,7 @@ from app.chzzk_auth import ChzzkTokenManager
 from app.chzzk_api import ChzzkClient
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 # ── 전역 싱글턴 ──────────────────────────────────────────────────
 _manager: Optional[BroadcastChatManager] = None

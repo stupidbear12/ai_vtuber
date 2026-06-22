@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # ── 채팅 선별 설정 ────────────────────────────────────────────────
 TRIGGER_KEYWORDS = ["시온", "sion", "@시온", "@sion"]  # 이 키워드 포함 시 무조건 반응
-RANDOM_RESPONSE_RATE = 0.15   # 트리거 키워드 없어도 15% 확률로 반응
-MIN_RESPONSE_INTERVAL = 5.0   # 연속 응답 최소 간격 (초) — 스팸 방지
+RANDOM_RESPONSE_RATE = 0.6    # 트리거 키워드 없어도 60% 확률로 반응
+MIN_RESPONSE_INTERVAL = 3.0   # 연속 응답 최소 간격 (초) — 스팸 방지
 CHAT_BUFFER_SIZE = 30         # 최근 채팅 히스토리 보관 개수
 
 
@@ -546,8 +546,10 @@ class BroadcastChatManager:
         """
         self.stats["received"] += 1
         self._buffer.add(msg)  # 히스토리 버퍼에 추가
+        logger.info(f"[ChatManager] 채팅 수신: {msg.author}: {msg.message[:40]}")
 
         if self._filter.should_respond(msg):
+            logger.info(f"[ChatManager] 응답 대상: {msg.author}: {msg.message[:30]}")
             try:
                 self._queue.put_nowait(msg)
             except asyncio.QueueFull:
@@ -556,6 +558,7 @@ class BroadcastChatManager:
                 logger.debug("[ChatManager] 큐 가득 참. 메시지 버림.")
         else:
             self.stats["skipped"] += 1
+            logger.info(f"[ChatManager] 필터링됨 (skip): {msg.author}: {msg.message[:30]}")
 
     async def _response_worker(self) -> None:
         """큐에서 채팅을 꺼내 ai_chat 호출 후 ai_live2d 표정 변경.
@@ -734,8 +737,13 @@ class BroadcastChatManager:
         if platform == "youtube":
             self._collector = YouTubeChatCollector(channel_id, self._on_chat)
         else:
-            # 공식 Access Token이 있으면 Session API 사용, 없으면 비공식 WebSocket 폴백
-            if self._chzzk_client and self._chzzk_client.has_token():
+            # 치지직: CHZZK_CHANNEL_ID가 설정되어 있으면 비공식 WebSocket (모든 채팅 수신)
+            # 없으면 공식 Session API 사용 (Access Token 필요)
+            ws_channel_id = os.environ.get("CHZZK_CHANNEL_ID", "")
+            if ws_channel_id:
+                self._collector = ChzzkChatCollector(ws_channel_id, self._on_chat)
+                logger.info(f"[ChatManager] 치지직 비공식 WebSocket 수집기 사용 (channel={ws_channel_id[:12]}...)")
+            elif self._chzzk_client and self._chzzk_client.has_token():
                 from app.chzzk_session import ChzzkOfficialChatCollector
                 self._collector = ChzzkOfficialChatCollector(self._chzzk_client, self._on_chat)
                 logger.info("[ChatManager] 치지직 공식 Session API 수집기 사용")

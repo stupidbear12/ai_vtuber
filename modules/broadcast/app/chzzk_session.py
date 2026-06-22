@@ -22,6 +22,34 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 
+class _TolerantJSON:
+    """python-socketio 패킷 파싱 시 'Extra data' 에러를 우회하는 JSON 래퍼.
+
+    치지직 Session API 서버가 보내는 일부 패킷이 python-socketio의
+    기본 JSON 디코더와 호환되지 않아 JSONDecodeError가 발생한다.
+    이 래퍼는 Extra data 에러 시 유효한 JSON 부분만 파싱하여 반환한다.
+    """
+
+    @staticmethod
+    def loads(s, *args, **kwargs):
+        try:
+            return json.loads(s, *args, **kwargs)
+        except json.JSONDecodeError as e:
+            if "Extra data" in str(e):
+                # 유효한 JSON 부분까지만 파싱
+                decoder = json.JSONDecoder()
+                try:
+                    obj, _ = decoder.raw_decode(s)
+                    return obj
+                except json.JSONDecodeError:
+                    pass
+            raise
+
+    @staticmethod
+    def dumps(obj, *args, **kwargs):
+        return json.dumps(obj, *args, **kwargs)
+
+
 class ChzzkOfficialChatCollector:
     """치지직 공식 Session API 기반 실시간 채팅 수집기.
 
@@ -78,6 +106,7 @@ class ChzzkOfficialChatCollector:
             reconnection=False,
             logger=False,
             engineio_logger=False,
+            json=_TolerantJSON,
         )
 
         @sio.event
@@ -116,15 +145,23 @@ class ChzzkOfficialChatCollector:
 
         @sio.on("CHAT")
         async def on_chat(data):
+            logger.debug(f"[ChzzkOfficial] CHAT 이벤트 수신: {str(data)[:200]}")
             self._dispatch(data, is_donation=False)
 
         @sio.on("DONATION")
         async def on_donation(data):
+            logger.debug(f"[ChzzkOfficial] DONATION 이벤트 수신: {str(data)[:200]}")
             self._dispatch(data, is_donation=True)
 
         @sio.on("SUBSCRIPTION")
         async def on_subscription(data):
+            logger.debug(f"[ChzzkOfficial] SUBSCRIPTION 이벤트 수신: {str(data)[:200]}")
             self._dispatch(data, is_donation=True)
+
+        @sio.on("*")
+        async def on_any(event, data):
+            if event not in ("SYSTEM", "CHAT", "DONATION", "SUBSCRIPTION"):
+                logger.info(f"[ChzzkOfficial] 알 수 없는 이벤트: {event}, data={str(data)[:200]}")
 
         # 2. 연결
         await sio.connect(
@@ -208,6 +245,14 @@ class ChzzkOfficialChatCollector:
           - SUBSCRIPTION: subscriberNickname, ...
         """
         from app.chat_collector import ChatMessage
+
+        # ── 자기 자신의 메시지 무시 (무한 루프 방지) ──
+        # channelId = 방송 채널 ID (자기 자신), senderChannelId = 채팅 발신자
+        my_channel_id = item.get("channelId", "")
+        sender_id = item.get("senderChannelId", "")
+        if sender_id and my_channel_id and sender_id == my_channel_id:
+            logger.debug(f"[ChzzkOfficial] 자기 메시지 무시: {item.get('content', '')[:30]}")
+            return
 
         if is_donation:
             # 후원 이벤트: donatorNickname, donationText
