@@ -640,7 +640,7 @@ class BroadcastChatManager:
             and self._chzzk_client.has_token()
         ):
             try:
-                await self._chzzk_client.send_chat(reply_text[:100])
+                await self._chzzk_client.send_chat(f"[시온] {reply_text}"[:100])
                 logger.debug(f"[ChatManager] Chzzk 채팅 전송 완료: {reply_text[:30]!r}")
             except Exception as e:
                 logger.warning(f"[ChatManager] Chzzk 채팅 전송 실패 (무시): {e}")

@@ -13,8 +13,11 @@ app/chzzk_api.py — 치지직 공식 REST API 클라이언트
     stream_key = await client.get_stream_key()
 """
 
+import asyncio
 import json
 import logging
+import time
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 import aiohttp
@@ -23,12 +26,17 @@ from app.chzzk_auth import CHZZK_BASE_URL, ChzzkTokenManager
 
 logger = logging.getLogger(__name__)
 
+# Access Token 방식: 유저당 동시 유지 가능한 활성 세션 수 (치지직 제한 3 → 1로 보수적 운용)
+MAX_ACTIVE_SESSIONS = 1
+SESSION_SLOT_WAIT_SEC = 90.0
+
 
 class ChzzkClient:
     """치지직 공식 API 클라이언트 — 모든 /open/v1/* 엔드포인트 담당."""
 
     def __init__(self, token_manager: ChzzkTokenManager):
         self._tm = token_manager
+        self._session_lock = asyncio.Lock()
 
     # ── 내부 헬퍼 ───────────────────────────────────────────────────
 
@@ -220,11 +228,45 @@ class ChzzkClient:
 
     # ── Session API ─────────────────────────────────────────────────
 
+    async def get_active_sessions(self) -> list:
+        """disconnectedDate가 없는 활성 세션만 반환."""
+        sessions = await self.get_sessions(page=0, size=20)
+        return [s for s in sessions if not s.get("disconnectedDate")]
+
+    async def wait_for_session_slot(self, timeout: float = SESSION_SLOT_WAIT_SEC) -> None:
+        """새 세션 URL 발급 전 활성 세션 수가 MAX_ACTIVE_SESSIONS 미만일 때까지 대기."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            active = await self.get_active_sessions()
+            if len(active) < MAX_ACTIVE_SESSIONS:
+                if active:
+                    logger.info(
+                        f"[ChzzkAPI] 활성 세션 {len(active)}개 "
+                        f"(제한 {MAX_ACTIVE_SESSIONS})"
+                    )
+                return
+            logger.warning(
+                f"[ChzzkAPI] 활성 세션 {len(active)}개 — "
+                f"유저당 {MAX_ACTIVE_SESSIONS}개 제한, 슬롯 대기 중..."
+            )
+            await asyncio.sleep(2)
+        raise RuntimeError(
+            f"치지직 활성 세션 슬롯 대기 시간 초과 "
+            f"(유저당 최대 {MAX_ACTIVE_SESSIONS}개). "
+            "이전 연결이 남아 있으면 잠시 후 다시 시도하세요."
+        )
+
+    @asynccontextmanager
+    async def session_slot(self):
+        """동시에 하나의 Socket.IO 연결만 허용하는 락."""
+        async with self._session_lock:
+            yield
+
     async def get_session_url(self) -> dict:
         """세션 연결 URL 조회 (GET /open/v1/sessions/auth).
 
         실시간 채팅 수신용 Socket.IO 연결 URL을 반환한다.
-        유저당 최대 3개 세션 유지 가능.
+        session_slot() 안에서 호출해야 하며, 유저당 활성 세션은 1개만 유지한다.
 
         Returns:
             {"url": "...", ...}

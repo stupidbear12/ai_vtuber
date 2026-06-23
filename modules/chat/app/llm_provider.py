@@ -92,7 +92,7 @@ async def _generate_ollama(
 def _gemini_generation_config(mode: str) -> dict:
     """모드별 Gemini 생성 파라미터."""
     if mode == "broadcast":
-        return {"temperature": 0.8, "maxOutputTokens": 500}
+        return {"temperature": 0.8, "maxOutputTokens": 80}
     return {"temperature": 0.7, "maxOutputTokens": 1000}
 
 
