@@ -6,7 +6,6 @@ __pycache__/
 *.bat
 !start-all.bat
 !stop-all.bat
-!start-pet.bat
 !check-ollama.bat
 
 # Live2D 바이너리 / 라이선스 제한 파일
@@ -16,12 +15,10 @@ modules/live2d/static/cubism/live2dcubismcore.min.js
 
 # Node.js 의존성
 node_modules/
-modules/live2d/electron/node_modules/
 
 # 기존 레거시 폴더 (old/) 내 라이선스 제한 파일
 old/live2d_web/models/**/*.png
 old/live2d_web/cubism/live2dcubismcore.min.js
-old/electron_pet/node_modules/
 
 # 레거시 데이터 디렉토리
 old/data/raw/
@@ -62,3 +59,22 @@ logs_*.txt
 
 # start-all.ps1 / stop-all.ps1 실행 상태
 .run/
+
+# Training — 대용량 모델/데이터 제외 (스크립트만 추적)
+training/sion-finetuned/
+training/sion-merged/
+training/sion-gguf/
+training/llama.cpp/
+training/*.jsonl
+training/*.json
+training/*.xlsx
+training/*.log
+training/*.txt
+training/__pycache__/
+
+# Broadcast 토큰 (민감 정보)
+modules/broadcast/app/chzzk_tokens.json
+
+# Claude/Cursor 설정
+.claude/
+.cursorignore

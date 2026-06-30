@@ -6,17 +6,11 @@ app/main.py — ai_live2d 독립 서버 진입점
   - Live2D 웹 뷰어 제공 (http://localhost:8001/live2d/static/)
   - WebSocket 채널 유지 (ws://localhost:8001/live2d/ws)
   - 표정/모션/립싱크/감정/반응 REST API
-  - 데스크톱 펫 채팅 엔드포인트 (/live2d/chat → ai_chat 위임)
 
 실행 방법:
-    cd ai_live2d
+    cd modules/live2d
     pip install -r requirements.txt
     uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
-
-Electron 펫 실행 (별도 터미널):
-    cd ai_live2d/electron
-    npm install
-    npm start
 """
 
 import uvicorn
@@ -55,7 +49,7 @@ app = FastAPI(
     description=(
         "Live2D 아바타 독립 모듈. "
         "웹 뷰어(Haru 모델), WebSocket 실시간 제어, "
-        "표정/모션/립싱크 REST API, 데스크톱 Electron 펫을 제공합니다."
+        "표정/모션/립싱크 REST API를 제공합니다."
     ),
     version="1.0.0",
 )

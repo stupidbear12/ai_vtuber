@@ -110,7 +110,7 @@ async def check_all_modules() -> dict:
 
 async def run_chat_pipeline(
     message: str,
-    mode: str = "pet",
+    mode: str = "broadcast",
     with_voice: bool = False,
 ) -> dict:
     """통합 채팅 파이프라인 실행.
@@ -122,7 +122,7 @@ async def run_chat_pipeline(
 
     Args:
         message: 사용자 채팅 입력
-        mode: "pet" (기본값) 또는 "broadcast"
+        mode: "broadcast" (기본값)
         with_voice: True면 Step 3 TTS 변환을 추가 실행 (기본 False)
 
     Returns:

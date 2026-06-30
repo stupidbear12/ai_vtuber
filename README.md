@@ -5,6 +5,8 @@
 시온(sion)은 치지직에서 라이브 방송하며 시청자와 채팅으로 소통하는 AI DJ VTuber입니다.
 파인튜닝된 LLM이 캐릭터 응답을 생성하고, ElevenLabs TTS로 음성을 합성하며, Live2D 아바타가 감정에 맞춰 표정과 립싱크를 동기화합니다.
 
+> **코드 분석:** [`docs/CODEBASE_MAP.md`](docs/CODEBASE_MAP.md) — 활성 코드는 `modules/`만 보면 됩니다.
+
 ---
 
 ## 시스템 아키텍처
@@ -21,11 +23,6 @@
       └→ Chzzk 공식 API — 채팅창에 시온 응답 전송
               ↓
   [OBS 브라우저 소스] → 방송 송출
-
-[데스크톱 펫]
-  사용자 입력 → live2d (8001) /live2d/chat
-        ↓ POST /chat (mode=pet)
-  chat (8002) → live2d WebSocket 표정 반영
 
 [통합 파이프라인 — core]
   POST /pipeline/chat (with_voice=true)
@@ -44,7 +41,7 @@
 ai_vtuber/
 ├── modules/
 │   ├── core/        8000 — 오케스트레이터 (상태 관리, 통합 파이프라인)
-│   ├── live2d/      8001 — Live2D 웹뷰어, WebSocket, Electron 펫
+│   ├── live2d/      8001 — Live2D 웹뷰어, WebSocket
 │   ├── chat/        8002 — Ollama 채팅 엔진 + ChromaDB RAG 메모리
 │   ├── broadcast/   8003 — 치지직/유튜브 채팅 수집 + 시온 반응 자동화
 │   ├── voice/       8004 — ElevenLabs TTS / Voice Design
@@ -61,8 +58,8 @@ ai_vtuber/
 | 모듈 | 포트 | 역할 |
 |------|------|------|
 | `core` | 8000 | 오케스트레이터 — 헬스 체크, 통합 채팅 파이프라인 |
-| `live2d` | 8001 | Live2D 웹 뷰어, WebSocket 실시간 제어, 표정/모션/립싱크, Electron 펫 |
-| `chat` | 8002 | Ollama 기반 시온 응답 (pet/broadcast 모드), ChromaDB RAG 메모리 |
+| `live2d` | 8001 | Live2D 웹 뷰어, WebSocket 실시간 제어, 표정/모션/립싱크 |
+| `chat` | 8002 | Ollama 기반 시온 응답 (broadcast 모드), ChromaDB RAG 메모리 |
 | `broadcast` | 8003 | 치지직/유튜브 채팅 수집, 시온 자동 반응, 시청자 닉네임 전달 |
 | `voice` | 8004 | ElevenLabs TTS, Voice Design, 감정별 음성 파라미터 |
 | `music` | 8005 | ACE-Step 음악 생성, AI DJ 자동 선곡, 크로스페이드 믹싱 (개발중) |
@@ -156,7 +153,7 @@ http://localhost:8001/live2d/static/?transparent=1&model=models/mao_pro/runtime/
 ```bash
 curl -X POST http://localhost:8000/pipeline/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "안녕 시온!", "mode": "pet", "with_voice": true}'
+  -d '{"message": "안녕 시온!", "mode": "broadcast", "with_voice": true}'
 ```
 
 ### 방송 수집 (broadcast)
@@ -189,24 +186,6 @@ curl -X POST http://localhost:8001/live2d/motion -d '{"group": "", "index": 1}'
 curl -X POST http://localhost:8004/voice/tts \
   -d '{"text":"안녕! 나는 시온이야","emotion":"happy"}' --output speech.mp3
 ```
-
----
-
-## Electron 데스크톱 펫
-
-화면 위 투명 창으로 시온과 채팅할 수 있습니다.
-
-```cmd
-start-all.bat
-start-pet.bat
-```
-
-| 조작 | 동작 |
-|------|------|
-| 캐릭터 클릭 | 채팅창 열기/닫기 |
-| 더블클릭 | 마우스 통과 모드 |
-| 트레이 아이콘 우클릭 | 표시/숨기기, 통과 모드, 종료 |
-| 드래그 | 창 위치 이동 |
 
 ---
 
@@ -246,8 +225,7 @@ start-pet.bat
 
 - [x] Live2D 웹 뷰어 (mao_pro, Haru 모델 선택)
 - [x] WebSocket 실시간 표정/모션 제어
-- [x] Electron 데스크톱 펫
-- [x] Ollama 채팅 엔진 (pet/broadcast 2모드)
+- [x] Ollama 채팅 엔진 (broadcast 모드)
 - [x] Llama 3.1 8B 파인튜닝 (시온 캐릭터, Q8_0 GGUF)
 - [x] 감정 태그 파싱 → Live2D 표정 매핑 (10종)
 - [x] ChromaDB RAG 메모리 (대화 기억 + 지식 베이스)

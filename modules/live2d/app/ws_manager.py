@@ -3,7 +3,7 @@
 app/ws_manager.py — WebSocket 연결 관리자
 
 역할:
-  - 브라우저(웹 뷰어, Electron 펫) WebSocket 연결을 관리
+  - 브라우저(웹 뷰어) WebSocket 연결을 관리
   - 연결된 모든 클라이언트에게 JSON 메시지 브로드캐스트
   - 연결이 끊긴 클라이언트 자동 정리
 """
@@ -18,7 +18,7 @@ class WSManager:
     """WebSocket 클라이언트 연결 풀 관리자.
 
     FastAPI WebSocket 엔드포인트에서 인스턴스를 공유해
-    여러 브라우저 창/Electron 창에 동시에 명령을 전송할 수 있다.
+    여러 브라우저 창에 동시에 명령을 전송할 수 있다.
     """
 
     def __init__(self):

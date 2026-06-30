@@ -71,7 +71,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     """통합 채팅 파이프라인 요청 모델."""
     message: str                           # 사용자 채팅 입력
-    mode: Optional[str] = "pet"            # "pet" 또는 "broadcast"
+    mode: Optional[str] = "broadcast"
     with_voice: Optional[bool] = False     # True면 TTS 변환 포함 (audio_base64 반환)
 
 class BroadcastStartRequest(BaseModel):
@@ -96,7 +96,7 @@ async def root():
           <th style="text-align:left;padding:8px;color:#89b4fa">역할</th></tr>
       <tr><td style="padding:8px">ai_live2d</td>
           <td style="padding:8px"><a href="{cfg.live2d_url()}" style="color:#89dceb">{cfg.live2d_url()}</a></td>
-          <td style="padding:8px">Live2D 아바타, WebSocket, Electron 펫</td></tr>
+          <td style="padding:8px">Live2D 아바타, WebSocket</td></tr>
       <tr><td style="padding:8px">ai_chat</td>
           <td style="padding:8px"><a href="{cfg.chat_url()}" style="color:#89dceb">{cfg.chat_url()}</a></td>
           <td style="padding:8px">Ollama 채팅 엔진 (시온 캐릭터)</td></tr>
@@ -153,7 +153,7 @@ async def pipeline_chat(req: ChatRequest):
 
     Args:
         req.message: 사용자 채팅 입력
-        req.mode: "pet" (기본) 또는 "broadcast"
+        req.mode: "broadcast" (기본)
         req.with_voice: True면 TTS 음성 변환 포함 (audio_base64 필드 반환)
 
     Returns:
@@ -165,11 +165,11 @@ async def pipeline_chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message가 비어있습니다.")
 
-    mode = req.mode or "pet"
-    if mode not in ("pet", "broadcast"):
+    mode = req.mode or "broadcast"
+    if mode != "broadcast":
         raise HTTPException(
             status_code=400,
-            detail="mode는 'pet' 또는 'broadcast'만 허용됩니다."
+            detail="mode는 'broadcast'만 허용됩니다."
         )
 
     result = await run_chat_pipeline(req.message, mode=mode, with_voice=bool(req.with_voice))

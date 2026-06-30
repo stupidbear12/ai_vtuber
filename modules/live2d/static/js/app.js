@@ -27,9 +27,9 @@ let motionRestoreTimer = null;
 
 const DEFAULT_MOTION_MS = 5500;
 
-// 투명 모드 (OBS 브라우저 소스 / Electron 데스크톱 펫)
+// 투명 모드 (OBS 브라우저 소스)
 const urlParams  = new URLSearchParams(location.search);
-const isTransparent = urlParams.get('transparent') === '1' || urlParams.get('pet') === 'true';
+const isTransparent = urlParams.get('transparent') === '1';
 const isChromakey = urlParams.get('chromakey') === '1';
 
 // ── 로그 ─────────────────────────────────────────────────────────
