@@ -324,15 +324,20 @@ class MusicEngine:
         logger.info("ACE-Step task submitted: %s", task_id)
 
         # -- 2. poll result (/query_result) --
+        # ACE-Step API expects task_id_list (JSON array string),
+        # returns {"data": [{"task_id":..., "status": int, "result": str}]}
+        # status: 0=processing, 1=succeeded, 2=failed/timeout
+        import json as _json
+
         deadline = time.monotonic() + self._poll_timeout
-        result_data: Optional[dict] = None
+        result_item: Optional[dict] = None
 
         while time.monotonic() < deadline:
             await asyncio.sleep(self._poll_interval)
 
             async with self._session.post(
                 f"{self._api_url}/query_result",
-                json={"task_id": task_id},
+                json={"task_id_list": _json.dumps([task_id])},
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status != 200:
@@ -340,69 +345,79 @@ class MusicEngine:
                         "ACE-Step /query_result HTTP %d -- retrying", resp.status
                     )
                     continue
-                result_data = await resp.json()
+                resp_json = await resp.json()
 
-            # response may be wrapped in "data" key
-            inner = result_data.get("data") or result_data
-            poll_status = inner.get("status", result_data.get("status", ""))
+            data_list = resp_json.get("data", [])
+            if not data_list:
+                logger.debug("ACE-Step task %s: empty data, retrying", task_id)
+                continue
 
-            if poll_status == "completed":
-                if "audios" in inner or "audio_paths" in inner:
-                    result_data = inner
+            item = data_list[0] if isinstance(data_list, list) else data_list
+            poll_status = item.get("status", 0)
+
+            if poll_status == 1:  # succeeded
+                result_item = item
                 break
-            if poll_status in ("failed", "error"):
-                error_msg = (
-                    inner.get("error") or inner.get("message")
-                    or result_data.get("error") or ""
-                )
+            if poll_status == 2:  # failed / timeout
+                error_msg = item.get("error") or item.get("progress_text") or "unknown error"
                 raise RuntimeError(f"ACE-Step task failed: {error_msg}")
 
-            # queued / processing -- keep waiting
-            logger.debug("ACE-Step task %s status: %s", task_id, poll_status)
+            # status 0 = processing -- keep waiting
+            progress = item.get("progress_text", "")
+            logger.debug("ACE-Step task %s processing: %s", task_id, progress)
         else:
             raise TimeoutError(
                 f"ACE-Step generation timed out after {self._poll_timeout}s"
             )
 
         # -- 3. extract audio path and download --
-        inner = result_data.get("data") or result_data
-        audios = (
-            inner.get("audios") or inner.get("audio_paths")
-            or result_data.get("audios") or result_data.get("audio_paths")
-            or []
-        )
-        if not audios:
-            raise RuntimeError(f"ACE-Step returned no audio: {result_data}")
+        # result_item["result"] is a JSON string: [{"file":"...","metas":{...},...}]
+        result_str = result_item.get("result", "[]")
+        try:
+            result_parsed = _json.loads(result_str) if isinstance(result_str, str) else result_str
+        except _json.JSONDecodeError:
+            result_parsed = []
 
-        if isinstance(audios[0], dict):
-            remote_path = audios[0].get("path") or audios[0].get("audio_path", "")
-        else:
-            remote_path = str(audios[0])
+        if not result_parsed or not isinstance(result_parsed, list):
+            raise RuntimeError(f"ACE-Step returned no audio: {result_item}")
+
+        first = result_parsed[0]
+        remote_path = first.get("file", "") if isinstance(first, dict) else str(first)
 
         if not remote_path:
-            raise RuntimeError(f"Empty audio path in result: {audios}")
+            raise RuntimeError(f"Empty audio path in result: {result_parsed}")
 
-        local_path = await self._download_audio(remote_path, params.audio_format)
+        local_path = await self._download_audio(remote_path, params.audio_format or "mp3")
 
         # extract metadata
         meta: dict = {}
-        if isinstance(audios[0], dict):
-            meta["bpm"] = audios[0].get("bpm") or params.bpm
-            meta["keyscale"] = (
-                audios[0].get("key") or audios[0].get("keyscale") or ""
-            )
-            meta["seed"] = audios[0].get("seed", params.seed)
+        if isinstance(first, dict):
+            metas = first.get("metas", {}) or {}
+            meta["bpm"] = metas.get("bpm") or params.bpm
+            meta["keyscale"] = metas.get("keyscale") or params.key_scale or ""
+            meta["seed"] = metas.get("seed", params.seed)
+            meta["prompt"] = first.get("prompt", params.prompt)
         else:
-            meta["seed"] = result_data.get("seed", params.seed)
+            meta["seed"] = params.seed
 
         return local_path, meta
 
     async def _download_audio(self, remote_path: str, fmt: str = "wav") -> Path:
         """Download audio file from ACE-Step server to local cache."""
         import aiohttp
+        from urllib.parse import urlparse, parse_qs, unquote
+
+        # Handle file paths returned as "/v1/audio?path=..." URLs
+        if remote_path.startswith("/v1/audio"):
+            parsed = urlparse(remote_path)
+            qs = parse_qs(parsed.query)
+            actual_path = qs.get("path", [remote_path])[0]
+            actual_path = unquote(actual_path)
+        else:
+            actual_path = remote_path
 
         url = f"{self._api_url}/v1/audio"
-        req_params = {"path": remote_path}
+        req_params = {"path": actual_path}
 
         async with self._session.get(
             url,

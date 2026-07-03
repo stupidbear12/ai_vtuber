@@ -1,4 +1,12 @@
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 python-dotenv>=1.0.0
-elevenlabs>=1.0.0
+# Edge TTS (기본 TTS 엔진) — Microsoft, 무료, GPU 불필요
+edge-tts>=6.1.0
+# Chatterbox TTS (데뷔곡 보컬 전용) — 로컬 GPU 추론, API 키 불필요
+chatterbox-tts
+# torchaudio는 chatterbox-tts 의존성으로 설치되지만, CUDA 버전 torch는
+# 별도로 설치 필요 (RTX 4060 Ti 기준):
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+torchaudio
+soundfile
