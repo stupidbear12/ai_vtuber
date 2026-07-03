@@ -13,8 +13,18 @@ const PARAMS = {
   BROW_R:     'ParamBrowRY',
   MOUTH_A:    'ParamA',          // 립싱크 (모음 'ㅏ' 개구도)
   BODY_X:     'ParamBodyAngleX',
+  BODY_Y:     'ParamBodyAngleY',
+  BODY_Z:     'ParamBodyAngleZ',
   BREATH:     'ParamBreath',
   CHEEK:      'ParamCheek',
+  EYE_L_SMILE: 'ParamEyeLSmile',
+  EYE_R_SMILE: 'ParamEyeRSmile',
+  EYE_EFFECT:  'ParamEyeEffect',
+  HEART_HEAL_ON: 'ParamHeartHealOn',
+  HEART_DRAW:    'ParamHeartDrow',
+  HEART_SIZE:    'ParamHeartSize',
+  AURA_ON:       'ParamAuraOn',
+  AURA:          'ParamAura',
 };
 
 const PRIORITY = {
@@ -147,20 +157,31 @@ class HeadSwayLayer {
 class ReactionSystem {
   constructor(state) {
     this._s = state;
-    this._cancelFlag = { v: false };
+    // 반응 이름별 취소 플래그 — 서로 다른 반응(예: heart + superchat)이
+    // 동시에 실행될 수 있도록 이름별로 독립 관리한다.
+    this._flags = new Map();
   }
 
   async trigger(name) {
-    this._cancelFlag.v = true;
+    const prev = this._flags.get(name);
+    if (prev) prev.v = true;
     const flag = { v: false };
-    this._cancelFlag = flag;
+    this._flags.set(name, flag);
     const map = {
       nod:       () => this._nod(flag),
       shake:     () => this._shake(flag),
       surprised: () => this._surprised(flag),
       superchat: () => this._superchat(flag),
+      laugh:       () => this._laugh(flag),
+      greet:       () => this._greet(flag),
+      embarrassed: () => this._embarrassed(flag),
+      think:       () => this._think(flag),
+      dance:       () => this._dance(flag),
+      heart:       () => this._heart(flag),
+      magic:       () => this._magic(flag),
     };
     await (map[name]?.() ?? Promise.resolve());
+    if (this._flags.get(name) === flag) this._flags.delete(name);
   }
 
   async _interp(layerId, from, to, durSec, flag) {
@@ -225,6 +246,117 @@ class ReactionSystem {
       0.45, flag);
     if (!flag.v) await sleep(1800);
     if (!flag.v) await this._fadeOut(L, 0.5, flag);
+    this._s.remove(L);
+  }
+
+  async _laugh(flag) {
+    const L = 'rx_laugh';
+    await this._interp(L,
+      { [PARAMS.EYE_L_SMILE]: 0, [PARAMS.EYE_R_SMILE]: 0, [PARAMS.MOUTH_A]: 0, [PARAMS.BODY_Y]: 0 },
+      { [PARAMS.EYE_L_SMILE]: 1, [PARAMS.EYE_R_SMILE]: 1, [PARAMS.MOUTH_A]: 1, [PARAMS.BODY_Y]: -3 },
+      0.15, flag);
+    for (let i = 0; i < 3 && !flag.v; i++) {
+      await this._interp(L,
+        { [PARAMS.MOUTH_A]: 1, [PARAMS.BODY_Y]: -3 },
+        { [PARAMS.MOUTH_A]: 0.3, [PARAMS.BODY_Y]: 2 },
+        0.14, flag);
+      await this._interp(L,
+        { [PARAMS.MOUTH_A]: 0.3, [PARAMS.BODY_Y]: 2 },
+        { [PARAMS.MOUTH_A]: 1, [PARAMS.BODY_Y]: -3 },
+        0.14, flag);
+    }
+    if (!flag.v) await this._fadeOut(L, 0.35, flag);
+    this._s.remove(L);
+  }
+
+  async _greet(flag) {
+    const L = 'rx_greet';
+    await this._interp(L,
+      { [PARAMS.BODY_X]: 0, [PARAMS.ANGLE_Y]: 0 },
+      { [PARAMS.BODY_X]: -6, [PARAMS.ANGLE_Y]: -6 },
+      0.25, flag);
+    if (!flag.v) await this._interp(L,
+      { [PARAMS.BODY_X]: -6, [PARAMS.ANGLE_Y]: -6 },
+      { [PARAMS.BODY_X]: 6, [PARAMS.ANGLE_Y]: 2 },
+      0.30, flag);
+    if (!flag.v) await this._interp(L,
+      { [PARAMS.BODY_X]: 6, [PARAMS.ANGLE_Y]: 2 },
+      { [PARAMS.BODY_X]: 0, [PARAMS.ANGLE_Y]: 0 },
+      0.25, flag);
+    this._s.remove(L);
+  }
+
+  async _embarrassed(flag) {
+    const L = 'rx_embarrassed';
+    await this._interp(L,
+      { [PARAMS.CHEEK]: 0, [PARAMS.BROW_L]: 0, [PARAMS.BROW_R]: 0 },
+      { [PARAMS.CHEEK]: 1, [PARAMS.BROW_L]: 0.3, [PARAMS.BROW_R]: 0.3 },
+      0.25, flag);
+    if (!flag.v) await this._interp(L,
+      { [PARAMS.EYE_L]: 1, [PARAMS.EYE_R]: 1 },
+      { [PARAMS.EYE_L]: 0, [PARAMS.EYE_R]: 0 },
+      0.12, flag);
+    if (!flag.v) await this._interp(L,
+      { [PARAMS.EYE_L]: 0, [PARAMS.EYE_R]: 0 },
+      { [PARAMS.EYE_L]: 1, [PARAMS.EYE_R]: 1 },
+      0.16, flag);
+    if (!flag.v) await sleep(800);
+    if (!flag.v) await this._fadeOut(L, 0.4, flag);
+    this._s.remove(L);
+  }
+
+  async _think(flag) {
+    const L = 'rx_think';
+    await this._interp(L,
+      { [PARAMS.EYE_BALL_X]: 0, [PARAMS.EYE_BALL_Y]: 0, [PARAMS.ANGLE_Z]: 0 },
+      { [PARAMS.EYE_BALL_X]: 0.3, [PARAMS.EYE_BALL_Y]: 0.3, [PARAMS.ANGLE_Z]: 6 },
+      0.30, flag);
+    if (!flag.v) await sleep(1200);
+    if (!flag.v) await this._fadeOut(L, 0.4, flag);
+    this._s.remove(L);
+  }
+
+  async _dance(flag) {
+    const L = 'rx_dance';
+    const steps = [
+      { [PARAMS.BODY_X]: -8, [PARAMS.ANGLE_Z]: -6 },
+      { [PARAMS.BODY_X]: 8,  [PARAMS.ANGLE_Z]: 6 },
+      { [PARAMS.BODY_X]: -8, [PARAMS.ANGLE_Z]: -6 },
+      { [PARAMS.BODY_X]: 8,  [PARAMS.ANGLE_Z]: 6 },
+    ];
+    let prev = { [PARAMS.BODY_X]: 0, [PARAMS.ANGLE_Z]: 0 };
+    for (const step of steps) {
+      if (flag.v) break;
+      await this._interp(L, prev, step, 0.22, flag);
+      prev = step;
+    }
+    if (!flag.v) await this._interp(L, prev, { [PARAMS.BODY_X]: 0, [PARAMS.ANGLE_Z]: 0 }, 0.22, flag);
+    this._s.remove(L);
+  }
+
+  async _heart(flag) {
+    const L = 'rx_heart';
+    await this._interp(L,
+      { [PARAMS.HEART_HEAL_ON]: 0, [PARAMS.HEART_DRAW]: 0, [PARAMS.HEART_SIZE]: 0 },
+      { [PARAMS.HEART_HEAL_ON]: 1, [PARAMS.HEART_DRAW]: 0, [PARAMS.HEART_SIZE]: 0 },
+      0.05, flag);
+    if (!flag.v) await this._interp(L,
+      { [PARAMS.HEART_HEAL_ON]: 1, [PARAMS.HEART_DRAW]: 0, [PARAMS.HEART_SIZE]: 0 },
+      { [PARAMS.HEART_HEAL_ON]: 1, [PARAMS.HEART_DRAW]: 1, [PARAMS.HEART_SIZE]: 1 },
+      0.4, flag);
+    if (!flag.v) await sleep(900);
+    if (!flag.v) await this._fadeOut(L, 0.5, flag);
+    this._s.remove(L);
+  }
+
+  async _magic(flag) {
+    const L = 'rx_magic';
+    await this._interp(L,
+      { [PARAMS.AURA_ON]: 0, [PARAMS.AURA]: 0 },
+      { [PARAMS.AURA_ON]: 1, [PARAMS.AURA]: 1 },
+      0.5, flag);
+    if (!flag.v) await sleep(1200);
+    if (!flag.v) await this._fadeOut(L, 0.6, flag);
     this._s.remove(L);
   }
 }

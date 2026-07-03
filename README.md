@@ -1,9 +1,9 @@
 # AI VTuber 시온(sion)
 
-> Ollama + Live2D + ElevenLabs 기반 AI DJ VTuber — 치지직(Chzzk) 라이브 방송
+> Ollama + Live2D + GPT-SoVITS 기반 AI DJ VTuber — 치지직(Chzzk) 라이브 방송
 
 시온(sion)은 치지직에서 라이브 방송하며 시청자와 채팅으로 소통하는 AI DJ VTuber입니다.
-파인튜닝된 LLM이 캐릭터 응답을 생성하고, ElevenLabs TTS로 음성을 합성하며, Live2D 아바타가 감정에 맞춰 표정과 립싱크를 동기화합니다.
+파인튜닝된 LLM이 캐릭터 응답을 생성하고, GPT-SoVITS 파인튜닝 모델로 음성을 합성하며, Live2D 아바타가 감정에 맞춰 표정과 립싱크를 동기화합니다.
 
 > **코드 분석:** [`docs/CODEBASE_MAP.md`](docs/CODEBASE_MAP.md) — 활성 코드는 `modules/`만 보면 됩니다.
 
@@ -18,7 +18,7 @@
       ↓ POST /chat (viewer_name 포함)
   chat (8002) — Ollama LLM (파인튜닝 sion 모델) + ChromaDB RAG
       ↓ {reply, emotion}
-      ├→ voice (8004) — ElevenLabs TTS → 음성 합성
+      ├→ voice (8004) — GPT-SoVITS TTS → 음성 합성
       ├→ live2d (8001) — 감정 태그 → 표정 변경 + 립싱크
       └→ Chzzk 공식 API — 채팅창에 시온 응답 전송
               ↓
@@ -44,7 +44,7 @@ ai_vtuber/
 │   ├── live2d/      8001 — Live2D 웹뷰어, WebSocket
 │   ├── chat/        8002 — Ollama 채팅 엔진 + ChromaDB RAG 메모리
 │   ├── broadcast/   8003 — 치지직/유튜브 채팅 수집 + 시온 반응 자동화
-│   ├── voice/       8004 — ElevenLabs TTS / Voice Design
+│   ├── voice/       8004 — GPT-SoVITS TTS (시온 파인튜닝 모델)
 │   └── music/       8005 — ACE-Step AI DJ (개발중)
 ├── ACE-Step-1.5/              AI 음악 생성 엔진
 ├── llama.cpp/                 GGUF 모델 변환/추론 도구
@@ -61,7 +61,7 @@ ai_vtuber/
 | `live2d` | 8001 | Live2D 웹 뷰어, WebSocket 실시간 제어, 표정/모션/립싱크 |
 | `chat` | 8002 | Ollama 기반 시온 응답 (broadcast 모드), ChromaDB RAG 메모리 |
 | `broadcast` | 8003 | 치지직/유튜브 채팅 수집, 시온 자동 반응, 시청자 닉네임 전달 |
-| `voice` | 8004 | ElevenLabs TTS, Voice Design, 감정별 음성 파라미터 |
+| `voice` | 8004 | GPT-SoVITS TTS (시온 전용 파인튜닝 모델, 한/영 지원) |
 | `music` | 8005 | ACE-Step 음악 생성, AI DJ 자동 선곡, 크로스페이드 믹싱 (개발중) |
 
 ---
@@ -71,7 +71,7 @@ ai_vtuber/
 | 영역 | 기술 |
 |------|------|
 | LLM | Ollama + Llama 3.1 8B 파인튜닝 (Q8_0 GGUF) |
-| TTS | ElevenLabs API (Voice Design + 감정별 파라미터) |
+| TTS | GPT-SoVITS (시온 전용 파인튜닝, 13곡 오리지널 학습) |
 | 아바타 | Live2D Cubism SDK (mao_pro 모델) |
 | 방송 플랫폼 | 치지직(Chzzk) — 공식 API (OAuth) + Session API (WebSocket) |
 | RAG | ChromaDB 벡터 DB (대화 기억 + 캐릭터 지식 베이스) |
@@ -88,7 +88,7 @@ ai_vtuber/
 
 ```bash
 cp .env.example .env
-# .env에 OLLAMA_MODEL, ELEVENLABS_API_KEY, CHZZK_CLIENT_ID 등 설정
+# .env에 OLLAMA_MODEL, GPT_SOVITS_API_URL, CHZZK_CLIENT_ID 등 설정
 ```
 
 ### 2. Ollama 모델 준비
@@ -102,7 +102,16 @@ ollama create sion -f Modelfile.from-chat
 ollama list
 ```
 
-### 3. 전체 실행
+### 3. GPT-SoVITS API 서버 실행
+
+voice 모듈은 별도 프로세스로 실행되는 GPT-SoVITS API 서버를 호출합니다.
+
+```bash
+cd C:\Users\thtgg\workspace2\GPT-SoVITS
+python api_v2.py -a 127.0.0.1 -p 9880
+```
+
+### 4. 전체 실행
 
 ```cmd
 # cmd (권장)
@@ -114,7 +123,7 @@ start-all.bat
 
 > cmd에서 `.ps1`을 실행하면 메모장만 열립니다. `.bat` 파일을 사용하세요.
 
-### 4. 방송 시작
+### 5. 방송 시작
 
 ```bash
 curl -X POST http://localhost:8003/broadcast/start \
@@ -122,7 +131,7 @@ curl -X POST http://localhost:8003/broadcast/start \
   -d '{"platform": "chzzk", "channel_id": "auto"}'
 ```
 
-### 5. OBS 설정
+### 6. OBS 설정
 
 브라우저 소스에 아래 URL 추가 (1920x1080, 투명 배경 체크):
 
@@ -134,7 +143,7 @@ http://localhost:8001/live2d/static/?transparent=1&model=models/mao_pro/runtime/
 .\open-obs-viewer.ps1   # URL 목록 + 브라우저 미리보기
 ```
 
-### 6. 서비스 확인
+### 7. 서비스 확인
 
 | URL | 설명 |
 |-----|------|
@@ -184,7 +193,7 @@ curl -X POST http://localhost:8001/live2d/motion -d '{"group": "", "index": 1}'
 
 ```bash
 curl -X POST http://localhost:8004/voice/tts \
-  -d '{"text":"안녕! 나는 시온이야","emotion":"happy"}' --output speech.mp3
+  -d '{"text":"안녕! 나는 시온이야"}' --output speech.wav
 ```
 
 ---
@@ -198,8 +207,7 @@ curl -X POST http://localhost:8004/voice/tts \
 | `CHROMA_HOST` | 선택 | `localhost` | ChromaDB 호스트 |
 | `CHROMA_PORT` | 선택 | `8010` | ChromaDB 포트 |
 | `CHAT_DISABLE_RAG` | 선택 | `0` | `1`이면 RAG 비활성화 |
-| `ELEVENLABS_API_KEY` | voice용 | — | ElevenLabs API 키 |
-| `ELEVENLABS_VOICE_ID` | 선택 | — | 기본 음성 ID |
+| `GPT_SOVITS_API_URL` | voice용 | `http://127.0.0.1:9880` | GPT-SoVITS API 서버 주소 |
 | `CHZZK_CLIENT_ID` | broadcast용 | — | 치지직 Open API Client ID |
 | `CHZZK_CLIENT_SECRET` | broadcast용 | — | 치지직 Open API Client Secret |
 | `BROADCAST_VOICE_ENABLED` | 선택 | `true` | 방송 TTS 활성화 |
@@ -231,7 +239,7 @@ curl -X POST http://localhost:8004/voice/tts \
 - [x] ChromaDB RAG 메모리 (대화 기억 + 지식 베이스)
 - [x] 치지직 채팅 수집 (Session API WebSocket)
 - [x] 치지직 공식 API 연동 (OAuth, 채팅 전송, 후원/구독 감지)
-- [x] ElevenLabs TTS 음성 합성 + 립싱크
+- [x] GPT-SoVITS TTS 음성 합성 + 립싱크 (시온 전용 파인튜닝, 한/영 지원)
 - [x] OBS 방송 송출 파이프라인
 - [x] 시청자 닉네임 호칭 (viewer_name 전달)
 - [x] 오케스트레이터 통합 파이프라인 (core)
@@ -266,7 +274,6 @@ curl -X POST http://localhost:8004/voice/tts \
 - [ ] 오리지널 Live2D 모델 커미션 (상업 라이선스)
 - [ ] 유튜브 클립 채널 자동화
 - [ ] 멀티 플랫폼 동시 방송 (유튜브 + 치지직)
-- [ ] 시온 TTS 음성 클론 (ElevenLabs Voice Cloning)
 
 **Phase 6 — 고도화**
 - [ ] 게임 플레이 AI (osu!, 마인크래프트 등)
@@ -281,4 +288,4 @@ curl -X POST http://localhost:8004/voice/tts \
 - 코드: MIT License
 - LLM: [Llama 3.1 Community License](https://www.llama.com/llama3_1/license/) (상업 이용 가능, "Built with Llama" 표기 필요)
 - Live2D: mao_pro 모델 라이선스 별도 확인 필요
-- TTS: ElevenLabs 유료 플랜 라이선스
+- TTS: GPT-SoVITS (MIT License)

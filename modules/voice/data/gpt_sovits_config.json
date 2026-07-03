@@ -1,0 +1,7 @@
+{
+  "ref_audio": "sion_v3_ref.wav",
+  "prompt_text": "stay happy with a little heart flatten",
+  "prompt_lang": "en",
+  "gpt_weights_path": "C:\\Users\\thtgg\\workspace2\\GPT-SoVITS\\GPT_weights_v2\\sion_jfla_v3-e20.ckpt",
+  "sovits_weights_path": "C:\\Users\\thtgg\\workspace2\\GPT-SoVITS\\SoVITS_weights_v2\\sion_jfla_v3_e20.pth"
+}

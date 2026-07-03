@@ -105,7 +105,7 @@ async def root():
           <td style="padding:8px">치지직/유튜브 방송 채팅 수집</td></tr>
       <tr><td style="padding:8px">ai_voice</td>
           <td style="padding:8px"><a href="{cfg.voice_url()}" style="color:#89dceb">{cfg.voice_url()}</a></td>
-          <td style="padding:8px">음성 합성 (ElevenLabs 예정)</td></tr>
+          <td style="padding:8px">음성 합성 (GPT-SoVITS)</td></tr>
     </table>
     <br>
     <a href="/docs" style="color:#89dceb">API 문서 (Swagger)</a> &nbsp;

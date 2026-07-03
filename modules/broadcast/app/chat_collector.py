@@ -473,7 +473,7 @@ class BroadcastChatManager:
       2. 채팅 선별 (키워드, 후원, 랜덤 확률)
       3. ai_chat POST /chat → 시온 응답 + 감정 태그
       3.5. Chzzk 채팅창에 시온 응답 전송 (공식 API, 선택)
-      4. ai_voice POST /voice/tts → TTS 음성 (MP3)
+      4. ai_voice POST /voice/tts → TTS 음성 (WAV, GPT-SoVITS)
       5. ai_live2d POST /live2d/emotion → 표정 변경
     """
 

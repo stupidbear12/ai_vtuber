@@ -10,7 +10,7 @@
 #   8001 — ai_live2d        (Live2D 아바타 서버)
   #   8002 — ai_chat          (Ollama 채팅 엔진)
 #   8003 — ai_broadcast     (방송 채팅 수집)
-#   8004 — ai_voice         (음성 합성, 스텁)
+#   8004 — ai_voice         (GPT-SoVITS TTS 클라이언트, 서버는 호스트에서 별도 실행)
 
 services:
 
@@ -98,7 +98,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── 음성 합성 서버 (스텁) ──────────────────────────────────────
+  # ── 음성 합성 서버 (GPT-SoVITS API 클라이언트) ──────────────────
   ai_voice:
     build:
       context: modules/voice
@@ -107,10 +107,8 @@ services:
     ports:
       - "8004:8004"
     environment:
-      # ElevenLabs 연동 시 아래 주석 해제
-      # - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-      # - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID}
-      - PLACEHOLDER=stub
+      # GPT-SoVITS API 서버(api_v2.py)는 호스트에서 GPU로 별도 실행됨
+      - GPT_SOVITS_API_URL=${GPT_SOVITS_API_URL:-http://host.docker.internal:9880}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8004/health"]

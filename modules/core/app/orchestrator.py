@@ -3,7 +3,7 @@
 app/orchestrator.py — ai_vtuber_core 모듈 간 연동 오케스트레이터
 
 역할:
-  - 각 모듈(ai_live2d, ai_chat, ai_broadcast, ai_voice) 상태 조회
+  - 각 모듈(ai_live2d, ai_chat, ai_broadcast, ai_voice, ai_music) 상태 조회
   - 모듈 URL 환경변수 관리 및 기본값 제공
   - 통합 채팅 파이프라인 실행 (chat → live2d emotion → voice TTS)
   - 방송 채팅 시작/중지 위임 (→ ai_broadcast)
@@ -13,6 +13,7 @@ app/orchestrator.py — ai_vtuber_core 모듈 간 연동 오케스트레이터
   ai_chat       → 8002
   ai_broadcast  → 8003
   ai_voice      → 8004
+  ai_music      → 8005
 """
 
 import asyncio
@@ -43,6 +44,10 @@ class ModuleConfig:
     @staticmethod
     def voice_url() -> str:
         return os.environ.get("AI_VOICE_URL", "http://localhost:8004")
+
+    @staticmethod
+    def music_url() -> str:
+        return os.environ.get("AI_MUSIC_URL", "http://localhost:8005")
 
 
 async def _get_module_health(session: aiohttp.ClientSession, name: str, url: str) -> dict:
@@ -94,12 +99,13 @@ async def check_all_modules() -> dict:
     cfg = ModuleConfig()
 
     async with aiohttp.ClientSession() as session:
-        # 4개 모듈에 동시에 헬스 체크 요청 (병렬)
+        # 5개 모듈에 동시에 헬스 체크 요청 (병렬)
         results = await asyncio.gather(
             _get_module_health(session, "ai_live2d",    cfg.live2d_url()),
             _get_module_health(session, "ai_chat",      cfg.chat_url()),
             _get_module_health(session, "ai_broadcast", cfg.broadcast_url()),
             _get_module_health(session, "ai_voice",     cfg.voice_url()),
+            _get_module_health(session, "ai_music",     cfg.music_url()),
         )
 
     modules = {r["name"]: r for r in results}
@@ -118,7 +124,7 @@ async def run_chat_pipeline(
     흐름:
       1. ai_chat POST /chat → {reply, emotion} 수신
       2. ai_live2d POST /live2d/emotion → 표정 변경
-      3. (선택) ai_voice POST /voice/tts → MP3 음성 생성 후 base64 반환
+      3. (선택) ai_voice POST /voice/tts → WAV 음성 생성 후 base64 반환
 
     Args:
         message: 사용자 채팅 입력
@@ -178,7 +184,7 @@ async def run_chat_pipeline(
 
     # ── Step 3: ai_voice TTS 변환 (선택적) ───────────────────────
     # with_voice=True 일 때만 실행. 실패해도 채팅 응답은 정상 반환.
-    # 오디오는 base64 인코딩된 MP3로 반환 (짧은 응답 기준 ~100~200KB).
+    # 오디오는 base64 인코딩된 WAV로 반환 (짧은 응답 기준 ~100~200KB).
     audio_base64: Optional[str] = None
     if with_voice and reply:
         try:

@@ -13,7 +13,8 @@ app/router.py — Live2D 제어 FastAPI 라우터
   POST /live2d/motion/play_once — 모션 한 번 재생 후 idle 복귀
   POST /live2d/mouth         — 립싱크 값 설정 (0.0 ~ 1.0)
   POST /live2d/mouth/clear   — 립싱크 레이어 제거
-  POST /live2d/reaction      — 반응 애니메이션 (nod/shake/surprised/superchat)
+  POST /live2d/reaction      — 반응 애니메이션 (nod/shake/surprised/superchat/laugh/greet/embarrassed/think/dance/heart/magic)
+  POST /live2d/effect        — 이펙트 (heart/magic)
   POST /live2d/idle/start    — Idle 애니메이션 시작
   POST /live2d/idle/stop     — Idle 애니메이션 정지
   POST /live2d/broadcast     — 방송 speak 브로드캐스트 (자막 + TTS 음성)
@@ -70,6 +71,10 @@ class MouthRequest(BaseModel):
 
 class ReactionRequest(BaseModel):
     """반응 애니메이션 요청 모델."""
+    name: str
+
+class EffectRequest(BaseModel):
+    """이펙트 요청 모델 (heart, magic 등)."""
     name: str
 
 class BroadcastSpeakRequest(BaseModel):
@@ -168,6 +173,13 @@ async def clear_mouth():
 async def trigger_reaction(req: ReactionRequest):
     """반응 애니메이션을 트리거한다."""
     await ws_manager.broadcast({"cmd": "reaction", "name": req.name})
+    return {"ok": True}
+
+
+@live2d_router.post("/effect")
+async def trigger_effect(req: EffectRequest):
+    """이펙트(heart, magic 등)를 트리거한다."""
+    await ws_manager.broadcast({"cmd": "effect", "name": req.name})
     return {"ok": True}
 
 

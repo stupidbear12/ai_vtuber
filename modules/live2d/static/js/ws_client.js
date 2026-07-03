@@ -102,6 +102,12 @@ class Live2DWSClient {
         this._log(`반응: ${msg.name}`);
         break;
 
+      // 이펙트 (heart, magic 등)
+      case 'effect':
+        this._anim.triggerReaction(msg.name);
+        this._log(`이펙트: ${msg.name}`);
+        break;
+
       // Idle 제어
       case 'idle_start':
         this._anim.startIdle();
@@ -135,10 +141,27 @@ class Live2DWSClient {
       setEmotion(emotion);
     }
 
+    // 1-1) 감정별 반응 애니메이션 트리거
+    const EMOTION_TO_REACTION = {
+      happy: 'laugh', joy: 'laugh', excited: 'laugh',
+      surprised: 'surprised', shocked: 'surprised', surprise: 'surprised',
+      angry: 'shake', anger: 'shake',
+      embarrassed: 'embarrassed', shy: 'embarrassed', flustered: 'embarrassed',
+      thinking: 'think',
+    };
+    const reaction = EMOTION_TO_REACTION[emotion];
+    if (reaction) this._anim.triggerReaction(reaction);
+
+    // 1-2) 후원(도네이션)이면 하트 이펙트 + superchat 반응
+    if (is_donation) {
+      this._anim.triggerReaction('heart');
+      this._anim.triggerReaction('superchat');
+    }
+
     // 2) 자막 표시
     this._showSubtitle(text, author, platform, is_donation);
 
-    // 3) TTS 오디오 재생 (base64 MP3)
+    // 3) TTS 오디오 재생 (base64 WAV, GPT-SoVITS)
     if (audio_base64) {
       this._playAudio(audio_base64);
     }
@@ -147,14 +170,14 @@ class Live2DWSClient {
   }
 
   /**
-   * base64 인코딩된 MP3 오디오를 재생하고 립싱크를 연동한다.
+   * base64 인코딩된 WAV 오디오를 재생하고 립싱크를 연동한다.
    */
   _playAudio(base64) {
     // 이전 재생 중단
     this._stopAudio();
 
     try {
-      const blob = this._base64ToBlob(base64, 'audio/mpeg');
+      const blob = this._base64ToBlob(base64, 'audio/wav');
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       this._currentAudio = audio;
