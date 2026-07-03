@@ -14,7 +14,7 @@ ai_vtuber/
 │   ├── live2d/       8001  Live2D 웹뷰어 + WebSocket
 │   ├── chat/         8002  Ollama 채팅 + RAG
 │   ├── broadcast/    8003  치지직/유튜브 채팅 수집
-│   ├── voice/        8004  ElevenLabs TTS
+│   ├── voice/        8004  GPT-SoVITS TTS
 │   └── music/        8005  AI DJ (개발중, start-all 미포함)
 ├── start-all.ps1     로컬 5모듈 기동
 ├── .env              런타임 설정
@@ -71,7 +71,7 @@ ai_vtuber/
 | 파일 | 역할 |
 |------|------|
 | `main.py` | `POST /voice/tts` |
-| `voice_engine.py` | ElevenLabs API |
+| `voice_engine.py` | GPT-SoVITS API 서버(api_v2.py) HTTP 클라이언트 |
 
 ### music (8005) — `modules/music/app/` (개발중)
 
@@ -152,7 +152,7 @@ OBS ← live2d/static/?transparent=1
 |--------|------|-----------|
 | Ollama | 11434 | 필수 |
 | ChromaDB | 8010 | RAG 켤 때만 |
-| ElevenLabs | API | TTS 켤 때 |
+| GPT-SoVITS API 서버 | 9880 | TTS 켤 때 (별도 프로세스, `python api_v2.py`) |
 | 치지직 Open API | — | OAuth·공식 채팅 전송 시 |
 
 ---

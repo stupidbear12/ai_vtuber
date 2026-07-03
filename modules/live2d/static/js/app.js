@@ -5,12 +5,23 @@ const DEFAULT_MODEL = 'models/mao_pro/runtime/mao_pro.model3.json';
 // model_dict.json 기반 감정→표정 매핑
 const EMOTION_TO_EXPR = {
   neutral: 'exp_01', calm: 'exp_01', default: 'exp_01',
-  happy: 'exp_04',   joy: 'exp_04',  smirk: 'exp_04',
-  sad: 'exp_02',     sadness: 'exp_02',
-  fear: 'exp_02',
-  angry: 'exp_03',   anger: 'exp_03', disgust: 'exp_03',
-  surprise: 'exp_04', surprised: 'exp_04',
-  thinking: 'exp_05',
+  content: 'exp_02', gentle: 'exp_02',
+  sad: 'exp_03',     sadness: 'exp_03', fear: 'exp_03',
+  happy: 'exp_04',   joy: 'exp_04', excited: 'exp_04',
+  annoyed: 'exp_05', frustrated: 'exp_05', thinking: 'exp_05',
+  embarrassed: 'exp_06', shy: 'exp_06', flustered: 'exp_06',
+  surprise: 'exp_07', surprised: 'exp_07', shocked: 'exp_07', worried: 'exp_07',
+  angry: 'exp_08',   anger: 'exp_08', disgust: 'exp_08',
+  smirk: 'exp_04',
+};
+
+// 감정별 모션 트리거 매핑 (group='', index)
+const EMOTION_TO_MOTION = {
+  happy:     { group: '', index: 0 },  // mtn_02
+  excited:   { group: '', index: 3 },  // special_01
+  surprised: { group: '', index: 4 },  // special_02
+  angry:     { group: '', index: 2 },  // mtn_04
+  shy:       { group: '', index: 1 },  // mtn_03
 };
 
 // 히트 영역 → 재생할 모션 (group, index)
@@ -220,10 +231,13 @@ function setExpression(nameOrIndex) {
   }
 }
 
-// 감정 이름 → 표정 변환 후 적용
+// 감정 이름 → 표정 변환 후 적용 (+ 매핑된 모션 동시 재생)
 function setEmotion(emotionName) {
   const expr = EMOTION_TO_EXPR[emotionName] ?? 'exp_01';
   setExpression(expr);
+
+  const motion = EMOTION_TO_MOTION[emotionName];
+  if (motion) playMotion(motion.group, motion.index);
 }
 
 // ── Motion 제어 (pixi-live2d-display 내장) ───────────────────────

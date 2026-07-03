@@ -1,4 +1,4 @@
-# start-all.ps1 — ai_vtuber local 5-module launcher
+# start-all.ps1 — ai_vtuber local 6-module launcher
 # Usage: .\start-all.ps1  or  start-all.bat
 
 $ErrorActionPreference = "Stop"
@@ -76,6 +76,7 @@ $modules = @(
     @{ Name = "live2d";    Port = 8001; Dir = "modules\live2d" },
     @{ Name = "broadcast"; Port = 8003; Dir = "modules\broadcast" },
     @{ Name = "voice";     Port = 8004; Dir = "modules\voice" },
+    @{ Name = "music";     Port = 8005; Dir = "modules\music" },
     @{ Name = "core";      Port = 8000; Dir = "modules\core" }
 )
 
@@ -141,6 +142,10 @@ Write-Host ""
 Write-Host "[DONE] All modules started." -ForegroundColor Green
 Write-Host "  Dashboard  http://localhost:8000"
 Write-Host "  Live2D     http://localhost:8001/live2d/static/"
+Write-Host "  Music      http://localhost:8005/health"
 Write-Host "  Status     http://localhost:8000/status"
 Write-Host "  Logs       logs_<module>.txt"
 Write-Host "  Stop       stop-all.bat"
+Write-Host ""
+Write-Host "[NOTE] ACE-Step GPU engine (port 8006) must be started separately:" -ForegroundColor DarkYellow
+Write-Host "  cd ACE-Step-1.5 && start_api_server.bat" -ForegroundColor DarkYellow
