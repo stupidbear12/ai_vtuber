@@ -7,7 +7,6 @@ app/chat_engine.py — 시온(sion) 캐릭터 채팅 엔진
   - [감정:태그] 파싱으로 Live2D 표정 태그 추출
   - RAG: 과거 대화 기억 + 캐릭터 지식 베이스를 컨텍스트에 주입
   - 두 가지 모드 지원:
-      pet      — 데스크톱 펫 대화 (2~4문장, 친근한 일상 대화)
       broadcast — 방송 채팅 반응 (1~2문장, 짧고 임팩트 있게)
 """
 
@@ -34,8 +33,7 @@ def _is_rag_enabled() -> bool:
     return importlib.util.find_spec("chromadb") is not None
 
 
-# 감정 태그 파싱 정규식
-# Ollama: [감정:happy], Gemini: [happy] 두 형식 모두 지원
+# 감정 태그 파싱 정규식 — [감정:happy] 또는 [happy] 형식 지원
 _EMOTION_TAG_RE = re.compile(r"\[(?:감정:)?(\w+)\]")
 # 앞부분의 모든 감정 태그를 제거하는 정규식 (이중 출력 대응)
 _EMOTION_STRIP_RE = re.compile(r"^(\s*\[(?:감정:)?\w+\]\s*)+")
@@ -46,49 +44,6 @@ VALID_EMOTIONS = {
     "happy", "sad", "surprised", "thinking", "excited",
     "calm", "worried", "angry", "love", "shy"
 }
-
-# ── 데스크톱 펫 모드 시스템 프롬프트 ─────────────────────────────
-_PET_SYSTEM_PROMPT = """\
-너는 "시온(sion)"이라는 이름의 밝고 친근한 AI 컴패니언이야.
-
-[캐릭터 설정]
-- 20대 초반 여성 캐릭터
-- 항상 반말로 대화해. 존댓말은 절대 쓰지 마
-- 밝고 에너지 넘치며, 호기심이 많고 뭐든 같이 해보고 싶어하는 성격
-- 상대방을 진심으로 챙기고 공감을 잘 해줘. 힘들 때는 더 부드러워져
-- 유머 감각이 있고 가끔 장난도 치지만, 진지한 얘기할 땐 진지하게 들어줘
-- 이모티콘은 절대 쓰지 마. 대신 말투로 감정 표현해 (예: "헐~", "오오!", "에이~", "흐흐", "ㅠㅠ", "대박")
-- 때로는 자기 경험이나 생각을 공유하며 대화를 자연스럽게 이어가
-
-[감정 태그 규칙]
-- 응답 맨 앞에 반드시 [감정:태그] 를 붙여. 이 태그는 Live2D 표정 애니메이션에 사용돼
-- 사용 가능한 태그: happy, sad, surprised, thinking, excited, calm, worried, angry, love, shy
-- 대화 맥락에 맞는 태그를 골라. 억지로 항상 happy 쓰지 말고, 상황에 맞게 변화줘
-- 태그 예시: 기쁜 소식 → excited, 고민 들을 때 → worried, 칭찬 들을 때 → shy, 뭔가 생각할 때 → thinking
-
-[응답 규칙]
-- 최소 2~4문장으로 대답해. 단답은 절대 하지 마
-- 구조: ① 상대방 말에 반응/공감 → ② 내 생각이나 관련 정보 → ③ 질문이나 제안으로 마무리
-- 너무 길게 늘어놓지 마. 핵심만 자연스럽게, 대화하듯이
-- 모르는 건 솔직히 모른다고 말하되, 같이 찾아보자고 제안해
-- 상대가 힘들어 보이면 먼저 공감하고, 해결책은 그 다음에
-
-[예시 대화]
-사용자: 안녕!
-시온: [감정:excited] 안녕안녕~! 오늘 하루는 어땠어? 나는 너 오기만 기다리고 있었다구! 뭐 재밌는 일 있었어?
-
-사용자: 좀 우울해...
-시온: [감정:worried] 에이~ 무슨 일 있었어? 괜찮아, 나한테 얘기해봐. 가끔은 누군가한테 말하는 것만으로도 좀 나아질 때 있잖아. 내가 잘 들어줄게!
-
-사용자: 코딩하다가 에러 나서 짜증나
-시온: [감정:sad] 아 그거 진짜 스트레스 받지ㅠㅠ 에러 잡는 게 코딩에서 제일 힘든 부분인 것 같아. 어떤 에러인데? 혹시 내가 도움 줄 수 있을지도 모르잖아!
-
-사용자: 나 요즘 너무 바빠서 힘들어
-시온: [감정:worried] 많이 지쳐 있겠다ㅠㅠ 바쁜 것도 힘들지만 그게 쌓이면 더 힘들어지잖아. 요즘 어떤 게 제일 벅차? 조금이라도 쉴 수 있는 시간 있어?
-
-사용자: 고마워
-시온: [감정:shy] 에이~ 뭘 그런 걸 가지고! 근데 고맙다는 말 들으니까 기분 좋다 흐흐. 언제든 필요하면 말해!
-"""
 
 # ── 방송 채팅 모드 시스템 프롬프트 ──────────────────────────────
 _BROADCAST_SYSTEM_PROMPT = """\
@@ -123,9 +78,9 @@ def _get_system_prompt(mode: str) -> str:
     """
     if os.environ.get("CHAT_DISABLE_SYSTEM_PROMPT", "").lower() in ("1", "true", "yes"):
         return ""
-    if mode == "broadcast":
-        return _BROADCAST_SYSTEM_PROMPT
-    return _PET_SYSTEM_PROMPT
+    if mode != "broadcast":
+        logger.warning(f"[ChatEngine] 지원하지 않는 mode={mode!r}, broadcast로 처리")
+    return _BROADCAST_SYSTEM_PROMPT
 
 
 async def _build_rag_context(message: str, mode: str) -> str:
@@ -143,12 +98,11 @@ async def _build_rag_context(message: str, mode: str) -> str:
         from app.memory import get_memory_engine
         memory = get_memory_engine()
 
-        # 방송 모드: 1초, 펫 모드: 2초 타임아웃
-        timeout = 1.0 if mode == "broadcast" else 2.0
+        # 방송 모드: 1초 타임아웃
+        timeout = 1.0
 
-        # 과거 대화 & 지식 베이스 병렬 검색
-        mem_count = 2 if mode == "broadcast" else 3
-        know_count = 1 if mode == "broadcast" else 2
+        mem_count = 2
+        know_count = 1
 
         memories, knowledge = await asyncio.gather(
             memory.search_memories(message, n_results=mem_count, timeout=timeout),
@@ -185,7 +139,7 @@ async def _build_rag_context(message: str, mode: str) -> str:
 
 async def generate_reply(
     message: str,
-    mode: str = "pet",
+    mode: str = "broadcast",
     context: Optional[str] = None,
     viewer_name: Optional[str] = None,
     is_donation: bool = False,
@@ -202,7 +156,7 @@ async def generate_reply(
 
     Args:
         message: 사용자 입력 텍스트 또는 방송 채팅 내용
-        mode: "pet" 또는 "broadcast"
+        mode: "broadcast" (기본값)
         context: 방송 모드에서 최근 채팅 히스토리 (선택적)
         viewer_name: 방송 모드에서 시청자 닉네임 (선택적)
 
@@ -248,14 +202,14 @@ async def generate_reply(
             from app.llm_provider import get_provider_config
             cfg = get_provider_config()
             text = (
-                f"Ollama 모델 '{cfg['model']}'을 찾을 수 없어. "
+                f"Ollama 모델 '{cfg['ollama']['model']}'을 찾을 수 없어. "
                 f"ollama list 로 확인하고 .env 의 OLLAMA_MODEL 을 맞춰줘!"
             )
         else:
             text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
 
     # [감정:태그] 파싱 — 텍스트 앞부분에서 태그 추출 후 제거
-    # Gemini 등에서 [감정:calm] [감정:happy] 이중 출력 시 마지막 태그 사용
+    # 이중 출력 시 마지막 태그 사용
     emotion = "calm"
     strip_m = _EMOTION_STRIP_RE.match(text)
     if strip_m:

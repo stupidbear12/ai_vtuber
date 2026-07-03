@@ -20,7 +20,6 @@ app/main.py — ai_broadcast 독립 서버 진입점
     ai_live2d (http://localhost:8001) — Live2D 표정 변경
 """
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import List, Optional
@@ -48,8 +47,6 @@ logging.basicConfig(level=logging.DEBUG)
 _manager: Optional[BroadcastChatManager] = None
 _token_manager: Optional[ChzzkTokenManager] = None
 _chzzk_client: Optional[ChzzkClient] = None
-_monitor_task: Optional[asyncio.Task] = None
-_live_was_live: bool = False  # 자동 감지용 직전 방송 상태
 
 # ── FastAPI 앱 생성 ───────────────────────────────────────────────
 app = FastAPI(
@@ -74,72 +71,13 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def _startup():
-    global _token_manager, _chzzk_client, _monitor_task
+    global _token_manager, _chzzk_client
     _token_manager = ChzzkTokenManager()
     _chzzk_client = ChzzkClient(_token_manager)
-    _monitor_task = asyncio.create_task(_auto_broadcast_monitor())
     logging.getLogger(__name__).info(
         f"[startup] Chzzk 공식 API 클라이언트 초기화 완료 "
         f"(token={'있음' if _token_manager.has_token() else '없음'})"
     )
-
-
-@app.on_event("shutdown")
-async def _shutdown():
-    global _monitor_task
-    if _monitor_task and not _monitor_task.done():
-        _monitor_task.cancel()
-
-
-async def _auto_broadcast_monitor() -> None:
-    """30초 간격으로 치지직 방송 상태를 체크해 채팅 수집을 자동 시작/중지.
-
-    흐름:
-      - 서버 기동 직후 5초 대기 (초기화 여유)
-      - 방송 시작 감지(미방송 → 방송 중): BroadcastChatManager 자동 시작
-      - 방송 종료 감지(방송 중 → 미방송): BroadcastChatManager 자동 중지
-      - Access Token 없으면 체크 건너뜀 (수동 /broadcast/start 사용)
-    """
-    global _manager, _live_was_live
-    _log = logging.getLogger(__name__)
-    _log.info("[AutoMonitor] 방송 자동 감지 시작 (30초 간격)")
-
-    await asyncio.sleep(5)  # 서버 초기화 여유
-
-    while True:
-        if _chzzk_client and _chzzk_client.has_token():
-            try:
-                status = await _chzzk_client.get_live_status()
-                is_live: bool = status.get("is_live", False)
-                title: str = status.get("title", "")
-
-                if is_live and not _live_was_live:
-                    _log.info(f"[AutoMonitor] 방송 시작 감지 (제목: {title}) → 채팅 수집 자동 시작")
-                    if not (_manager and _manager.is_running):
-                        _manager = BroadcastChatManager(chzzk_client=_chzzk_client)
-                        try:
-                            await _manager.start("chzzk", "auto")
-                            _log.info("[AutoMonitor] 채팅 수집 자동 시작 완료")
-                        except Exception as e:
-                            _log.error(f"[AutoMonitor] 채팅 수집 시작 실패: {e}")
-                            _manager = None
-
-                elif not is_live and _live_was_live:
-                    _log.info("[AutoMonitor] 방송 종료 감지 → 채팅 수집 자동 중지")
-                    if _manager and _manager.is_running:
-                        try:
-                            final_stats = await _manager.stop()
-                            _log.info(f"[AutoMonitor] 채팅 수집 자동 중지 완료. 통계: {final_stats}")
-                        except Exception as e:
-                            _log.error(f"[AutoMonitor] 채팅 수집 중지 실패: {e}")
-                        _manager = None
-
-                _live_was_live = is_live
-
-            except Exception as e:
-                _log.debug(f"[AutoMonitor] 상태 체크 오류 (무시): {e}")
-
-        await asyncio.sleep(30)
 
 
 # ── 요청 모델 ────────────────────────────────────────────────────
@@ -260,16 +198,6 @@ async def broadcast_stop():
         "success": True,
         "message": "방송 채팅 수집이 중지되었습니다.",
         "stats": final_stats,
-    }
-
-
-@app.get("/broadcast/monitor")
-async def broadcast_monitor_status():
-    """자동 방송 감지 모니터 상태를 반환한다."""
-    return {
-        "monitor_running": _monitor_task is not None and not _monitor_task.done(),
-        "last_known_live": _live_was_live,
-        "auto_collect_active": bool(_manager and _manager.is_running),
     }
 
 

@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # ── 채팅 선별 설정 ────────────────────────────────────────────────
 TRIGGER_KEYWORDS = ["시온", "sion", "@시온", "@sion"]  # 이 키워드 포함 시 무조건 반응
-RANDOM_RESPONSE_RATE = 0.6    # 트리거 키워드 없어도 60% 확률로 반응
-MIN_RESPONSE_INTERVAL = 3.0   # 연속 응답 최소 간격 (초) — 스팸 방지
+RANDOM_RESPONSE_RATE = 1.0    # 트리거 키워드 없어도 100% 확률로 반응
+MIN_RESPONSE_INTERVAL = 0.5   # 연속 응답 최소 간격 (초) — 거의 모든 채팅에 반응
 CHAT_BUFFER_SIZE = 30         # 최근 채팅 히스토리 보관 개수
 
 
@@ -603,29 +603,33 @@ class BroadcastChatManager:
         chat_context = self._buffer.get_context_text(limit=10)
 
         # ── Step 2: ai_chat 호출 → 시온 응답 생성 ───────────────
-        try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "message": current,
-                    "mode": "broadcast",
-                    "context": chat_context if chat_context else None,
-                    "viewer_name": msg.author,
-                    "is_donation": msg.is_donation,
-                }
-                async with session.post(
-                    f"{self._chat_url}/chat",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60.0),  # Ollama 응답 대기
-                ) as resp:
-                    if resp.status != 200:
-                        raise RuntimeError(f"ai_chat 응답 오류: HTTP {resp.status}")
-                    data = await resp.json()
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "message": current,
+                "mode": "broadcast",
+                "context": chat_context if chat_context else None,
+                "viewer_name": msg.author,
+                "is_donation": msg.is_donation,
+            }
+            async with session.post(
+                f"{self._chat_url}/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=60.0),  # Ollama 응답 대기
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise RuntimeError(
+                        f"ai_chat 응답 오류: HTTP {resp.status}: {body[:200]}"
+                    )
+                data = await resp.json()
 
-            reply_text = data.get("reply", "")
-            emotion = data.get("emotion", "calm")
-        except Exception as e:
-            logger.error(f"[ChatManager] ai_chat 호출 실패: {e}")
-            return
+        if data.get("error"):
+            raise RuntimeError(f"ai_chat 오류: {data['error']}")
+
+        reply_text = (data.get("reply") or "").strip()
+        emotion = data.get("emotion", "calm")
+        if not reply_text:
+            raise RuntimeError("ai_chat 응답이 비어 있습니다")
 
         logger.info(
             f"[ChatManager] [{msg.platform}] {msg.author}: "
@@ -640,7 +644,7 @@ class BroadcastChatManager:
             and self._chzzk_client.has_token()
         ):
             try:
-                await self._chzzk_client.send_chat(reply_text[:100])
+                await self._chzzk_client.send_chat(f"[시온] {reply_text}"[:100])
                 logger.debug(f"[ChatManager] Chzzk 채팅 전송 완료: {reply_text[:30]!r}")
             except Exception as e:
                 logger.warning(f"[ChatManager] Chzzk 채팅 전송 실패 (무시): {e}")

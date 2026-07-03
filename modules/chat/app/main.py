@@ -4,7 +4,7 @@ app/main.py — ai_chat 독립 서버 진입점
 
 역할:
   - Ollama LLM을 활용한 시온(sion) 캐릭터 채팅 엔진
-  - 데스크톱 펫 모드(pet)와 방송 채팅 모드(broadcast) 지원
+  - 방송 채팅 모드(broadcast) 지원
   - [감정:태그] 파싱으로 Live2D 표정 제어 정보 반환
   - RAG: 과거 대화 기억 + 캐릭터 지식 베이스 연동
 
@@ -101,7 +101,7 @@ app = FastAPI(
     title="ai_chat — 시온 채팅 엔진",
     description=(
         "Ollama 기반 시온(sion) 캐릭터 채팅 엔진. "
-        "데스크톱 펫(pet)과 방송 채팅(broadcast) 두 가지 모드를 지원합니다."
+        "방송 채팅(broadcast) 모드를 지원합니다."
     ),
     version="2.0.0",
     lifespan=lifespan,
@@ -122,10 +122,10 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     """채팅 요청 모델."""
     message: str
-    mode: Optional[str] = "pet"           # "pet" 또는 "broadcast"
+    mode: Optional[str] = "broadcast"     # "broadcast"
     context: Optional[str] = None         # 방송 모드 채팅 히스토리 (선택)
     viewer_name: Optional[str] = None     # 방송 모드 시청자 닉네임 (선택)
-    is_donation: Optional[bool] = False   # 후원/도네이션 여부 (Gemini 라우팅용)
+    is_donation: Optional[bool] = False   # 후원/도네이션 여부 (API 호환용)
 
 
 class ChatResponse(BaseModel):
@@ -159,7 +159,7 @@ async def health_check():
         "status": "ok",
         "module": "ai_chat",
         "version": "2.0.0",
-        "supported_modes": ["pet", "broadcast"],
+        "supported_modes": ["broadcast"],
         "rag_enabled": _is_rag_available(),
         "llm": get_provider_config(),
     }
@@ -170,7 +170,6 @@ async def get_persona():
     """사용 가능한 채팅 모드 및 설명 반환."""
     return {
         "modes": {
-            "pet": "데스크톱 펫 대화 모드 — 2~4문장, 친근한 일상 대화",
             "broadcast": "방송 채팅 반응 모드 — 1~2문장, 짧고 임팩트 있게",
         },
         "emotions": list(sorted([
@@ -208,11 +207,11 @@ async def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message가 비어있습니다.")
 
-    mode = req.mode or "pet"
-    if mode not in ("pet", "broadcast"):
+    mode = req.mode or "broadcast"
+    if mode != "broadcast":
         raise HTTPException(
             status_code=400,
-            detail="mode는 'pet' 또는 'broadcast'만 허용됩니다.",
+            detail="mode는 'broadcast'만 허용됩니다.",
         )
 
     result = await generate_reply(

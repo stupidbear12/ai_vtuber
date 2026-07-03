@@ -17,21 +17,11 @@ app/router.py — Live2D 제어 FastAPI 라우터
   POST /live2d/idle/start    — Idle 애니메이션 시작
   POST /live2d/idle/stop     — Idle 애니메이션 정지
   POST /live2d/broadcast     — 방송 speak 브로드캐스트 (자막 + TTS 음성)
-  POST /live2d/chat          — 데스크톱 펫 채팅 (ai_chat 모듈 위임)
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Optional, Union
-
-import aiohttp
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
@@ -47,11 +37,6 @@ live2d_router = APIRouter(prefix="/live2d", tags=["live2d"])
 
 # 정적 파일 디렉토리 (ai_live2d/static/)
 _STATIC_DIR = Path(__file__).parent.parent / "static"
-
-
-def _chat_url() -> str:
-    """ai_chat 모듈 베이스 URL (환경변수 AI_CHAT_URL, 기본 localhost:8002)."""
-    return os.environ.get("AI_CHAT_URL", "http://localhost:8002").rstrip("/")
 
 
 # ── 요청 모델 ────────────────────────────────────────────────────
@@ -96,10 +81,6 @@ class BroadcastSpeakRequest(BaseModel):
     platform: str = ""
     is_donation: bool = False
     audio_base64: Optional[str] = None
-
-class ChatRequest(BaseModel):
-    """데스크톱 펫 채팅 요청 모델."""
-    message: str
 
 
 # ── 라우트 정의 ──────────────────────────────────────────────────
@@ -228,44 +209,6 @@ async def broadcast_speak(req: BroadcastSpeakRequest):
 
     await ws_manager.broadcast(payload)
     return {"ok": True, "clients": ws_manager.count}
-
-
-# ── 데스크톱 펫 채팅 엔드포인트 ─────────────────────────────────
-
-@live2d_router.post("/chat")
-async def chat(req: ChatRequest):
-    """데스크톱 펫 채팅 — ai_chat 모듈에 위임해 시온 응답을 생성한다."""
-    text = ""
-    emotion = "calm"
-    error_msg = None
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{_chat_url()}/chat",
-                json={"message": req.message, "mode": "pet"},
-                timeout=aiohttp.ClientTimeout(total=30.0),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    raise RuntimeError(f"ai_chat 응답 오류: HTTP {resp.status} — {body[:200]}")
-                data = await resp.json()
-                text = data.get("reply", "")
-                emotion = data.get("emotion", "calm")
-                if data.get("error"):
-                    error_msg = data["error"]
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"[Live2D] ai_chat 호출 실패: {e}")
-        text = "죄송해요, 잠시 후 다시 말씀해주세요."
-        emotion = "worried"
-
-    await ws_manager.broadcast({"cmd": "set_emotion", "emotion": emotion})
-
-    result: dict = {"reply": text, "emotion": emotion}
-    if error_msg:
-        result["error"] = error_msg
-    return result
 
 
 # ── 정적 파일 마운트 ─────────────────────────────────────────────
