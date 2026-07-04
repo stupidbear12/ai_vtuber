@@ -13,6 +13,7 @@ app/chat_collector.py — 치지직/유튜브 방송 채팅 수집 및 시온 �
 
 import asyncio
 import base64
+import datetime
 import json
 import logging
 import os
@@ -31,6 +32,22 @@ TRIGGER_KEYWORDS = ["시온", "sion", "@시온", "@sion"]  # 이 키워드 포�
 RANDOM_RESPONSE_RATE = 1.0    # 트리거 키워드 없어도 100% 확률로 반응
 MIN_RESPONSE_INTERVAL = 0.5   # 연속 응답 최소 간격 (초) — 거의 모든 채팅에 반응
 CHAT_BUFFER_SIZE = 30         # 최근 채팅 히스토리 보관 개수
+
+# ── 라디오 모드 설정 ─────────────────────────────────────────────
+RADIO_IDLE_SECONDS = int(os.environ.get("RADIO_IDLE_SECONDS", "120"))     # 채팅 없을 시 라디오 시작 대기 (초)
+RADIO_INTERVAL_MIN = int(os.environ.get("RADIO_INTERVAL_MIN", "60"))      # 라디오 멘트 최소 간격 (초)
+RADIO_INTERVAL_MAX = int(os.environ.get("RADIO_INTERVAL_MAX", "180"))     # 라디오 멘트 최대 간격 (초)
+
+RADIO_PROMPTS = [
+    "현재 재생 중인 곡에 대해 이야기해주세요",
+    "시청자들에게 인사하고 채팅을 유도해주세요",
+    "최근 있었던 재미있는 일에 대해 TMI를 해주세요",
+    "오늘의 기분이나 날씨에 대해 이야기해주세요",
+    "좋아하는 음악이나 게임에 대해 이야기해주세요",
+    "방송에서 하고 싶은 것에 대해 이야기해주세요",
+    "시청자들에게 오늘 뭐 했는지 물어보세요",
+    "최근 본 영상이나 밈에 대해 이야기해주세요",
+]
 
 
 # ── 데이터 모델 ──────────────────────────────────────────────────
@@ -510,16 +527,22 @@ class BroadcastChatManager:
         self._channel_id: str = ""
         self._collect_task: Optional[asyncio.Task] = None
         self._worker_task: Optional[asyncio.Task] = None
+        self._radio_task: Optional[asyncio.Task] = None
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=50)
         # start() 호출 시 현재 이벤트 루프를 저장 — 스레드 안전 큐 삽입에 사용
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-        # 통계: 수신/응답/건너뜀/오류 횟수
+        # 라디오 모드 상태
+        self._last_activity_time: float = 0.0   # 마지막 채팅/응답 시각
+        self._radio_active: bool = False         # 현재 라디오 멘트 실행 중 여부
+
+        # 통계: 수신/응답/건너뜀/오류/라디오 횟수
         self.stats: dict = {
             "received": 0,
             "responded": 0,
             "skipped": 0,
             "errors": 0,
+            "radio_talks": 0,
         }
 
     def _on_chat(self, msg: ChatMessage) -> None:
@@ -546,6 +569,7 @@ class BroadcastChatManager:
         """
         self.stats["received"] += 1
         self._buffer.add(msg)  # 히스토리 버퍼에 추가
+        self._last_activity_time = time.time()  # 라디오 모드 idle 타이머 리셋
         logger.info(f"[ChatManager] 채팅 수신: {msg.author}: {msg.message[:40]}")
 
         if self._filter.should_respond(msg):
@@ -575,6 +599,7 @@ class BroadcastChatManager:
             try:
                 await self._respond_to_chat(msg)
                 self._filter.mark_responded()  # 최소 응답 간격 카운트 시작
+                self._last_activity_time = time.time()  # 라디오 idle 타이머 리셋
                 self.stats["responded"] += 1
             except Exception as e:
                 self.stats["errors"] += 1
@@ -712,6 +737,169 @@ class BroadcastChatManager:
         except Exception as e:
             logger.warning(f"[ChatManager] ai_live2d 연결 실패 (무시): {e}")
 
+    @staticmethod
+    def _get_time_period() -> str:
+        """현재 시간대 문자열 반환 (라디오 프롬프트 컨텍스트용)."""
+        hour = datetime.datetime.now().hour
+        if hour < 6:
+            return "새벽"
+        elif hour < 12:
+            return "아침"
+        elif hour < 18:
+            return "오후"
+        else:
+            return "저녁"
+
+    async def _radio_worker(self) -> None:
+        """라디오 모드 워커 — 채팅이 없으면 자동으로 혼잣말을 생성한다.
+
+        동작 흐름:
+          1. 매 1초마다 idle 시간 체크
+          2. RADIO_IDLE_SECONDS 경과 시 첫 라디오 멘트 생성
+          3. 이후 RADIO_INTERVAL_MIN~MAX 랜덤 간격으로 반복
+          4. 채팅 큐에 메시지가 있으면 라디오 멘트 건너뜀
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                break
+
+            if not self._running:
+                break
+
+            # 큐에 채팅이 대기 중이면 라디오 불필요
+            if self._queue.qsize() > 0:
+                continue
+
+            # idle 시간 체크
+            elapsed = time.time() - self._last_activity_time
+            if elapsed < RADIO_IDLE_SECONDS:
+                continue
+
+            # ── 라디오 멘트 생성 ──────────────────────────────
+            self._radio_active = True
+            logger.info(f"[RadioMode] 라디오 모드 진입 (idle {elapsed:.0f}s)")
+
+            try:
+                # 시간대 정보 포함 프롬프트 구성
+                time_period = self._get_time_period()
+                prompt = random.choice(RADIO_PROMPTS)
+                radio_message = (
+                    f"[라디오 모드] 시온이 혼자 방송 중입니다. "
+                    f"현재 시간대: {time_period}. "
+                    f"자연스럽게 혼잣말하세요. {prompt}"
+                )
+
+                # ai_chat 호출
+                async with aiohttp.ClientSession() as session:
+                    payload = {
+                        "message": radio_message,
+                        "mode": "broadcast",
+                        "context": f"[라디오 모드] 현재 {time_period} 시간대. 채팅이 없어서 혼자 방송 중.",
+                        "viewer_name": "시온",
+                        "is_donation": False,
+                    }
+                    async with session.post(
+                        f"{self._chat_url}/chat",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=60.0),
+                    ) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            logger.warning(f"[RadioMode] ai_chat 오류: HTTP {resp.status}: {body[:200]}")
+                            continue
+                        data = await resp.json()
+
+                if data.get("error"):
+                    logger.warning(f"[RadioMode] ai_chat 오류: {data['error']}")
+                    continue
+
+                reply_text = (data.get("reply") or "").strip()
+                emotion = data.get("emotion", "calm")
+                if not reply_text:
+                    logger.warning("[RadioMode] ai_chat 응답이 비어 있음")
+                    continue
+
+                # 라디오용 ChatMessage 생성 → _respond_to_chat 파이프라인 재사용
+                radio_msg = ChatMessage(
+                    platform="radio",
+                    author="시온",
+                    message=radio_message,
+                    is_donation=False,
+                )
+
+                # TTS + Live2D 파이프라인 직접 실행 (ai_chat은 위에서 이미 호출함)
+                # _respond_to_chat을 재사용하되, ai_chat 중복 호출을 피하기 위해
+                # 음성/표정 부분만 실행
+                audio_base64: Optional[str] = None
+                if self._voice_enabled and reply_text:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                f"{self._voice_url}/voice/tts",
+                                json={"text": reply_text, "emotion": emotion},
+                                timeout=aiohttp.ClientTimeout(total=30.0),
+                            ) as resp:
+                                if resp.status == 200:
+                                    audio_bytes = await resp.read()
+                                    audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+                                else:
+                                    logger.warning(f"[RadioMode] TTS 실패: HTTP {resp.status}")
+                    except Exception as e:
+                        logger.warning(f"[RadioMode] ai_voice 연결 실패 (무시): {e}")
+
+                # Live2D 표정 + 브로드캐스트
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        await session.post(
+                            f"{self._live2d_url}/live2d/emotion",
+                            json={"emotion": emotion},
+                            timeout=aiohttp.ClientTimeout(total=3.0),
+                        )
+
+                        broadcast_payload: dict = {
+                            "cmd": "speak",
+                            "text": reply_text,
+                            "emotion": emotion,
+                            "author": "시온",
+                            "platform": "radio",
+                            "is_donation": False,
+                        }
+                        if audio_base64:
+                            broadcast_payload["audio_base64"] = audio_base64
+
+                        await session.post(
+                            f"{self._live2d_url}/live2d/broadcast",
+                            json=broadcast_payload,
+                            timeout=aiohttp.ClientTimeout(total=5.0),
+                        )
+                except Exception as e:
+                    logger.warning(f"[RadioMode] ai_live2d 연결 실패 (무시): {e}")
+
+                self.stats["radio_talks"] += 1
+                self._last_activity_time = time.time()  # 라디오 멘트도 활동으로 간주
+                logger.info(f"[RadioMode] 라디오 멘트 완료: [{emotion}] {reply_text[:50]}")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[RadioMode] 라디오 멘트 생성 실패: {e}")
+            finally:
+                self._radio_active = False
+
+            # 다음 라디오 멘트까지 랜덤 대기
+            wait_seconds = random.randint(RADIO_INTERVAL_MIN, RADIO_INTERVAL_MAX)
+            logger.debug(f"[RadioMode] 다음 멘트까지 {wait_seconds}초 대기")
+            for _ in range(wait_seconds):
+                if not self._running or self._queue.qsize() > 0:
+                    break
+                try:
+                    await asyncio.sleep(1.0)
+                except asyncio.CancelledError:
+                    return
+            # 대기 중 채팅이 들어왔으면 idle 타이머 자연 리셋됨
+
     async def start(self, platform: str, channel_id: str) -> None:
         """채팅 수집을 시작한다.
 
@@ -735,7 +923,8 @@ class BroadcastChatManager:
         self._running = True
         # _on_chat이 스레드에서 호출될 때 call_soon_threadsafe에서 사용할 루프 저장
         self._loop = asyncio.get_running_loop()
-        self.stats = {"received": 0, "responded": 0, "skipped": 0, "errors": 0}
+        self._last_activity_time = time.time()  # 라디오 idle 타이머 초기화
+        self.stats = {"received": 0, "responded": 0, "skipped": 0, "errors": 0, "radio_talks": 0}
 
         # 플랫폼에 맞는 수집기 생성
         if platform == "youtube":
@@ -755,9 +944,10 @@ class BroadcastChatManager:
                 self._collector = ChzzkChatCollector(channel_id, self._on_chat)
                 logger.info("[ChatManager] 치지직 비공식 WebSocket 수집기 사용 (Access Token 없음)")
 
-        # 수집 태스크와 응답 워커 태스크를 동시에 시작
+        # 수집 태스크, 응답 워커, 라디오 워커 태스크를 동시에 시작
         self._collect_task = asyncio.create_task(self._collector.start())
         self._worker_task = asyncio.create_task(self._response_worker())
+        self._radio_task = asyncio.create_task(self._radio_worker())
 
         logger.info(
             f"[ChatManager] 방송 채팅 수집 시작: "
@@ -775,8 +965,8 @@ class BroadcastChatManager:
         if self._collector:
             self._collector.stop()
 
-        # 수집/워커 태스크 취소 및 정리 (최대 3초 대기)
-        for task in (self._collect_task, self._worker_task):
+        # 수집/워커/라디오 태스크 취소 및 정리 (최대 3초 대기)
+        for task in (self._collect_task, self._worker_task, self._radio_task):
             if task and not task.done():
                 task.cancel()
                 try:
@@ -787,6 +977,8 @@ class BroadcastChatManager:
         self._collector = None
         self._collect_task = None
         self._worker_task = None
+        self._radio_task = None
+        self._radio_active = False
         self._loop = None  # 루프 참조 해제 (추가 콜백 예약 차단)
 
         final_stats = dict(self.stats)
@@ -800,6 +992,11 @@ class BroadcastChatManager:
 
     def get_status(self) -> dict:
         """현재 상태 딕셔너리 반환."""
+        seconds_since_activity = (
+            time.time() - self._last_activity_time
+            if self._last_activity_time > 0
+            else 0.0
+        )
         return {
             "running": self._running,
             "platform": self._platform,
@@ -812,4 +1009,6 @@ class BroadcastChatManager:
             "voice_url": self._voice_url,
             "voice_enabled": self._voice_enabled,
             "chzzk_official_api": bool(self._chzzk_client and self._chzzk_client.has_token()),
+            "radio_mode": self._radio_active,
+            "last_activity": round(seconds_since_activity, 1),
         }
