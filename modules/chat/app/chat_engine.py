@@ -17,9 +17,14 @@ import re
 import logging
 from typing import Optional
 
+import aiohttp
+
 from app.llm_provider import generate_text
 
 logger = logging.getLogger(__name__)
+
+# Brain(해마) 모듈 URL
+BRAIN_URL = os.environ.get("BRAIN_URL", "http://localhost:8007")
 
 
 # RAG 활성화 여부 — 환경변수 또는 패키지 부재 시 비활성화
@@ -81,6 +86,56 @@ def _get_system_prompt(mode: str) -> str:
     if mode != "broadcast":
         logger.warning(f"[ChatEngine] 지원하지 않는 mode={mode!r}, broadcast로 처리")
     return _BROADCAST_SYSTEM_PROMPT
+
+
+async def _query_brain(message: str) -> str:
+    """해마(Brain) 모듈에 쿼리해 컨텍스트 힌트를 얻는다.
+
+    Brain 모듈이 꺼져 있거나 응답이 없으면 빈 문자열을 반환한다.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{BRAIN_URL}/brain/query",
+                json={"message": message},
+                timeout=aiohttp.ClientTimeout(total=1.0),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    hint = data.get("context_hint", "")
+                    if hint:
+                        logger.info(f"[ChatEngine] Brain 힌트: {hint[:80]}")
+                    return hint
+    except Exception as e:
+        logger.debug(f"[ChatEngine] Brain 쿼리 실패 (무시): {e}")
+    return ""
+
+
+async def _notify_brain_learn(
+    message: str,
+    response: str,
+    emotion: str,
+    viewer_name: str = "",
+    is_donation: bool = False,
+) -> None:
+    """대화 결과를 해마(Brain) 모듈에 비동기로 전달한다 (fire-and-forget)."""
+    try:
+        engagement = 0.8 if is_donation else 0.5
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                f"{BRAIN_URL}/brain/learn",
+                json={
+                    "message": message,
+                    "response": response,
+                    "emotion": emotion,
+                    "engagement": engagement,
+                    "viewer_name": viewer_name or "",
+                    "is_donation": is_donation,
+                },
+                timeout=aiohttp.ClientTimeout(total=2.0),
+            )
+    except Exception as e:
+        logger.debug(f"[ChatEngine] Brain 학습 전달 실패 (무시): {e}")
 
 
 async def _build_rag_context(message: str, mode: str) -> str:
@@ -170,8 +225,16 @@ async def generate_reply(
     text = ""
     error_msg = None
 
-    # RAG 컨텍스트 빌드 (실패해도 계속 진행)
-    rag_context = await _build_rag_context(message, mode)
+    # Brain(해마) 컨텍스트 + RAG 컨텍스트 빌드 (실패해도 계속 진행)
+    brain_hint, rag_context = await asyncio.gather(
+        _query_brain(message),
+        _build_rag_context(message, mode),
+        return_exceptions=True,
+    )
+    if isinstance(brain_hint, Exception):
+        brain_hint = ""
+    if isinstance(rag_context, Exception):
+        rag_context = ""
 
     # 유저 프롬프트 구성
     # 우선순위: RAG 컨텍스트 → 채팅 히스토리 → 현재 메시지
@@ -184,8 +247,14 @@ async def generate_reply(
     if viewer_name and mode == "broadcast":
         user_prompt += f"\n\n(이 채팅을 보낸 시청자 닉네임: {viewer_name})"
 
+    # Brain 힌트를 RAG 컨텍스트와 함께 주입
+    extra_context_parts = []
+    if brain_hint:
+        extra_context_parts.append(f"[해마 분석]\n{brain_hint}")
     if rag_context:
-        user_prompt = f"{rag_context}\n\n{user_prompt}"
+        extra_context_parts.append(rag_context)
+    if extra_context_parts:
+        user_prompt = "\n\n".join(extra_context_parts) + "\n\n" + user_prompt
 
     try:
         text = await generate_text(
@@ -222,6 +291,12 @@ async def generate_reply(
     # 유효하지 않은 감정 태그는 calm으로 폴백
     if emotion not in VALID_EMOTIONS:
         emotion = "calm"
+
+    # Brain(해마): 대화 결과를 학습 모듈에 전달 (fire-and-forget)
+    if not error_msg:
+        asyncio.create_task(
+            _notify_brain_learn(message, text, emotion, viewer_name or "", is_donation)
+        )
 
     # RAG: 오류 없이 성공한 대화만 기억에 저장 (응답을 블로킹하지 않음)
     if not error_msg and _is_rag_enabled():

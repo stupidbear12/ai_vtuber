@@ -14,6 +14,7 @@ app/orchestrator.py — ai_vtuber_core 모듈 간 연동 오케스트레이터
   ai_broadcast  → 8003
   ai_voice      → 8004
   ai_music      → 8005
+  ai_brain      → 8007
 """
 
 import asyncio
@@ -48,6 +49,10 @@ class ModuleConfig:
     @staticmethod
     def music_url() -> str:
         return os.environ.get("AI_MUSIC_URL", "http://localhost:8005")
+
+    @staticmethod
+    def brain_url() -> str:
+        return os.environ.get("AI_BRAIN_URL", "http://localhost:8007")
 
 
 async def _get_module_health(session: aiohttp.ClientSession, name: str, url: str) -> dict:
@@ -106,6 +111,7 @@ async def check_all_modules() -> dict:
             _get_module_health(session, "ai_broadcast", cfg.broadcast_url()),
             _get_module_health(session, "ai_voice",     cfg.voice_url()),
             _get_module_health(session, "ai_music",     cfg.music_url()),
+            _get_module_health(session, "ai_brain",     cfg.brain_url()),
         )
 
     modules = {r["name"]: r for r in results}
