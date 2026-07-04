@@ -88,6 +88,13 @@ services:
       # 같은 Docker 네트워크 내에서 서비스명으로 접근
       - AI_CHAT_URL=http://ai_chat:8002
       - AI_LIVE2D_URL=http://ai_live2d:8001
+      # OBS WebSocket (호스트의 OBS에 연결)
+      - OBS_WS_HOST=host.docker.internal
+      - OBS_WS_PORT=4455
+      - OBS_WS_PASSWORD=${OBS_WS_PASSWORD:-}
+      - OBS_BGM_SOURCE_NAME=${OBS_BGM_SOURCE_NAME:-BGM}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - ai_chat
       - ai_live2d

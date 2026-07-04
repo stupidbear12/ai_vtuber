@@ -25,6 +25,8 @@ from typing import Awaitable, Callable, Deque, List, Optional
 
 import aiohttp
 
+from app.obs_controller import OBSController, get_obs_controller, get_wav_duration
+
 logger = logging.getLogger(__name__)
 
 # ── 채팅 선별 설정 ────────────────────────────────────────────────
@@ -34,9 +36,9 @@ MIN_RESPONSE_INTERVAL = 0.5   # 연속 응답 최소 간격 (초) — 거의 모
 CHAT_BUFFER_SIZE = 30         # 최근 채팅 히스토리 보관 개수
 
 # ── 라디오 모드 설정 ─────────────────────────────────────────────
-RADIO_IDLE_SECONDS = int(os.environ.get("RADIO_IDLE_SECONDS", "120"))     # 채팅 없을 시 라디오 시작 대기 (초)
-RADIO_INTERVAL_MIN = int(os.environ.get("RADIO_INTERVAL_MIN", "60"))      # 라디오 멘트 최소 간격 (초)
-RADIO_INTERVAL_MAX = int(os.environ.get("RADIO_INTERVAL_MAX", "180"))     # 라디오 멘트 최대 간격 (초)
+RADIO_IDLE_SECONDS = int(os.environ.get("RADIO_IDLE_SECONDS", "30"))      # 채팅 없을 시 라디오 시작 대기 (초)
+RADIO_INTERVAL_MIN = int(os.environ.get("RADIO_INTERVAL_MIN", "20"))      # 라디오 멘트 최소 간격 (초)
+RADIO_INTERVAL_MAX = int(os.environ.get("RADIO_INTERVAL_MAX", "60"))      # 라디오 멘트 최대 간격 (초)
 
 RADIO_PROMPTS = [
     "현재 재생 중인 곡에 대해 이야기해주세요",
@@ -521,6 +523,7 @@ class BroadcastChatManager:
 
         self._buffer = ChatBuffer()
         self._filter = ChatFilter()
+        self._obs = get_obs_controller()
         self._collector = None
         self._running = False
         self._platform: str = ""
@@ -559,6 +562,25 @@ class BroadcastChatManager:
             # 이벤트 루프 스레드에 안전하게 _enqueue 예약
             self._loop.call_soon_threadsafe(self._enqueue, msg)
 
+    def _is_own_message(self, msg: ChatMessage) -> bool:
+        """시온 자신의 메시지인지 확인 (자문자답 방지).
+
+        Chzzk 채팅에 시온 응답을 보내면 WebSocket으로 다시 수신되므로
+        이를 필터링해야 한다.
+        """
+        # [시온] 접두사로 보낸 메시지 (send_chat에서 f"[시온] {reply}"로 보냄)
+        if msg.message.startswith("[시온]"):
+            return True
+        # 시온 봇 계정의 닉네임으로 보낸 메시지
+        # BOT_CHZZK_NICKNAME 환경변수로 커스터마이즈 가능
+        bot_nicknames = {"시온", "sion", "그거하지말자"}
+        extra = os.environ.get("BOT_CHZZK_NICKNAME", "")
+        if extra:
+            bot_nicknames.add(extra)
+        if msg.author in bot_nicknames:
+            return True
+        return False
+
     def _enqueue(self, msg: ChatMessage) -> None:
         """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
 
@@ -567,6 +589,11 @@ class BroadcastChatManager:
         Args:
             msg: 처리할 채팅 메시지
         """
+        # 자문자답 방지: 시온 자신의 메시지는 무시
+        if self._is_own_message(msg):
+            logger.debug(f"[ChatManager] 자체 메시지 무시: {msg.author}: {msg.message[:30]}")
+            return
+
         self.stats["received"] += 1
         self._buffer.add(msg)  # 히스토리 버퍼에 추가
         self._last_activity_time = time.time()  # 라디오 모드 idle 타이머 리셋
@@ -676,6 +703,7 @@ class BroadcastChatManager:
 
         # ── Step 3: ai_voice TTS 음성 생성 (선택) ─────────────────
         audio_base64: Optional[str] = None
+        audio_duration: float = 0.0
         if self._voice_enabled and reply_text:
             try:
                 async with aiohttp.ClientSession() as session:
@@ -687,9 +715,10 @@ class BroadcastChatManager:
                         if resp.status == 200:
                             audio_bytes = await resp.read()
                             audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+                            audio_duration = get_wav_duration(audio_bytes)
                             logger.debug(
                                 f"[ChatManager] TTS 생성 완료: "
-                                f"{len(audio_bytes)} bytes"
+                                f"{len(audio_bytes)} bytes, {audio_duration:.2f}s"
                             )
                         else:
                             logger.warning(
@@ -699,6 +728,11 @@ class BroadcastChatManager:
                 logger.warning(f"[ChatManager] ai_voice 연결 실패 (무시): {e}")
 
         # ── Step 4: ai_live2d 표정 변경 + 음성 재생 ───────────────
+        # TTS 음성이 있으면 BGM 음소거
+        bgm_muted = False
+        if audio_base64 and audio_duration > 0:
+            bgm_muted = await self._obs.mute_bgm()
+
         try:
             async with aiohttp.ClientSession() as session:
                 # 표정 변경
@@ -736,6 +770,15 @@ class BroadcastChatManager:
                         logger.debug(f"[ChatManager] broadcast 전송: HTTP {resp.status}")
         except Exception as e:
             logger.warning(f"[ChatManager] ai_live2d 연결 실패 (무시): {e}")
+        finally:
+            # TTS 재생 완료 대기 후 BGM 음소거 해제
+            if bgm_muted:
+                await asyncio.sleep(audio_duration + 1.0)
+                await self._obs.unmute_bgm()
+                logger.debug(
+                    f"[ChatManager] BGM 음소거 해제 "
+                    f"(대기 {audio_duration + 1.0:.1f}s)"
+                )
 
     @staticmethod
     def _get_time_period() -> str:
@@ -833,6 +876,7 @@ class BroadcastChatManager:
                 # _respond_to_chat을 재사용하되, ai_chat 중복 호출을 피하기 위해
                 # 음성/표정 부분만 실행
                 audio_base64: Optional[str] = None
+                audio_duration: float = 0.0
                 if self._voice_enabled and reply_text:
                     try:
                         async with aiohttp.ClientSession() as session:
@@ -844,12 +888,17 @@ class BroadcastChatManager:
                                 if resp.status == 200:
                                     audio_bytes = await resp.read()
                                     audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+                                    audio_duration = get_wav_duration(audio_bytes)
                                 else:
                                     logger.warning(f"[RadioMode] TTS 실패: HTTP {resp.status}")
                     except Exception as e:
                         logger.warning(f"[RadioMode] ai_voice 연결 실패 (무시): {e}")
 
                 # Live2D 표정 + 브로드캐스트
+                bgm_muted = False
+                if audio_base64 and audio_duration > 0:
+                    bgm_muted = await self._obs.mute_bgm()
+
                 try:
                     async with aiohttp.ClientSession() as session:
                         await session.post(
@@ -876,6 +925,14 @@ class BroadcastChatManager:
                         )
                 except Exception as e:
                     logger.warning(f"[RadioMode] ai_live2d 연결 실패 (무시): {e}")
+                finally:
+                    if bgm_muted:
+                        await asyncio.sleep(audio_duration + 1.0)
+                        await self._obs.unmute_bgm()
+                        logger.debug(
+                            f"[RadioMode] BGM 음소거 해제 "
+                            f"(대기 {audio_duration + 1.0:.1f}s)"
+                        )
 
                 self.stats["radio_talks"] += 1
                 self._last_activity_time = time.time()  # 라디오 멘트도 활동으로 간주
@@ -980,6 +1037,7 @@ class BroadcastChatManager:
         self._radio_task = None
         self._radio_active = False
         self._loop = None  # 루프 참조 해제 (추가 콜백 예약 차단)
+        self._obs.close()  # OBS WebSocket 연결 종료
 
         final_stats = dict(self.stats)
         logger.info(f"[ChatManager] 수집 중지. 통계: {final_stats}")

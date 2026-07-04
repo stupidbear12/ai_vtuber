@@ -5,3 +5,4 @@ python-dotenv>=1.0.0
 pytchat>=0.5.5
 websockets>=11.0
 python-socketio>=5.8.0
+obsws-python>=1.6.0
