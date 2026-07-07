@@ -147,5 +147,5 @@ Write-Host "  Status     http://localhost:8000/status"
 Write-Host "  Logs       logs_<module>.txt"
 Write-Host "  Stop       stop-all.bat"
 Write-Host ""
-Write-Host "[NOTE] ACE-Step GPU engine (port 8006) must be started separately:" -ForegroundColor DarkYellow
-Write-Host "  cd ACE-Step-1.5 && start_api_server.bat" -ForegroundColor DarkYellow
+Write-Host "[NOTE] YouTube Music BGM: FFmpeg 필요, OBS는 ws://localhost:8005/music/stream 구독" -ForegroundColor DarkYellow
+Write-Host "[NOTE] AI DJ(ACE-Step) 사용 시: MUSIC_ENABLE_AI_DJ=1 + port 8006 API 서버" -ForegroundColor DarkYellow

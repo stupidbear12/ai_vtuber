@@ -319,6 +319,31 @@ class ChzzkClient:
         logger.info("[ChzzkAPI] 후원 이벤트 구독 완료")
         return content or {}
 
+    async def get_session_events(self, session_key: str) -> list:
+        """세션에 구독된 이벤트 목록 조회 (GET /open/v1/sessions/events).
+
+        Returns:
+            구독된 이벤트 타입 목록 (e.g. ["CHAT", "DONATION", "SUBSCRIPTION"])
+        """
+        headers = await self._headers()
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{CHZZK_BASE_URL}/open/v1/sessions/events",
+                headers=headers,
+                params={"sessionKey": session_key},
+                timeout=aiohttp.ClientTimeout(total=10.0),
+            ) as r:
+                text = await r.text()
+                if r.status != 200:
+                    raise RuntimeError(f"세션 이벤트 조회 실패 (HTTP {r.status}): {text}")
+                data = json.loads(text)
+        content = data.get("content") or data
+        if isinstance(content, dict):
+            return content.get("data", [])
+        if isinstance(content, list):
+            return content
+        return []
+
     async def subscribe_subscription(self, session_key: str) -> dict:
         """구독 알림 이벤트 구독 (POST /open/v1/sessions/events/subscribe/subscription)."""
         content = await self._post_query(

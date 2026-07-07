@@ -3,13 +3,23 @@
 ai_music FastAPI 서버 (포트 8005)
 
 엔드포인트:
+  [YouTube Music — 방송 BGM]
+  GET  /ymusic/search      — 곡 검색
+  POST /ymusic/play        — 검색어/video_id 재생
+  POST /ymusic/queue       — 큐 추가
+  POST /ymusic/skip|pause|resume|stop
+  GET  /ymusic/now-playing
+
+  [AI DJ — MUSIC_ENABLE_AI_DJ=1 일 때]
   POST /music/generate    — 즉시 1곡 생성 (동기 대기)
   POST /music/queue       — DJ 큐에 생성 요청 추가
   POST /music/skip        — 현재 곡 스킵 → 다음 곡 크로스페이드
   GET  /music/now-playing — 현재 재생 중인 트랙 정보
   GET  /music/queue-list  — 대기 큐 목록
   GET  /music/status      — DJ·믹서·GPU 상태
-  WS   /music/stream      — 실시간 오디오 PCM 스트림
+
+  [공통]
+  WS   /music/stream      — 실시간 오디오 PCM 스트림 (OBS 연동)
   GET  /health            — 헬스 체크
 """
 
@@ -35,16 +45,20 @@ from .music_engine import MusicEngine, GenerationParams, TrackMeta
 from .dj_controller import DJController
 from .audio_mixer import AudioMixer
 from .track_queue import TrackQueue, QueueFullError
+from .youtube_music import YouTubeMusicPlayer
 
 logger = logging.getLogger(__name__)
 
 HOST = os.environ.get("AI_MUSIC_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AI_MUSIC_PORT", "8005"))
+ENABLE_AI_DJ = os.environ.get("MUSIC_ENABLE_AI_DJ", "0") == "1"
+ENABLE_YTMUSIC = os.environ.get("YTMUSIC_ENABLED", "1") == "1"
 
 engine: Optional[MusicEngine] = None
 queue: Optional[TrackQueue] = None
 mixer: Optional[AudioMixer] = None
 dj: Optional[DJController] = None
+ymusic: Optional[YouTubeMusicPlayer] = None
 
 
 # ── Pydantic 스키마 ───────────────────────────────────────────────
@@ -71,6 +85,19 @@ class QueueRequest(BaseModel):
 
 class SkipRequest(BaseModel):
     crossfade_sec: float = Field(3.0, ge=0.5, le=10.0)
+
+
+class YTMusicPlayRequest(BaseModel):
+    query: Optional[str] = Field(None, description="곡 제목·아티스트 검색어")
+    video_id: Optional[str] = Field(None, description="YouTube video ID (11자)")
+    requester: Optional[str] = Field(None, description="요청자 닉네임")
+
+
+class YTMusicQueueRequest(BaseModel):
+    video_id: str = Field(..., description="YouTube video ID")
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    requester: Optional[str] = None
 
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────
@@ -125,27 +152,47 @@ async def _play_track(track: TrackMeta) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine, queue, mixer, dj
+    global engine, queue, mixer, dj, ymusic
 
     logger.info("ai_music 모듈 초기화 중...")
 
-    engine = MusicEngine()
-    await engine.initialize()
-
-    queue = TrackQueue()
     mixer = AudioMixer()
     await mixer.initialize()
 
-    dj = DJController(engine=engine, queue=queue, mixer=mixer)
-    await dj.start()
+    if ENABLE_YTMUSIC:
+        ymusic = YouTubeMusicPlayer(mixer)
+        await ymusic.start()
+        logger.info("YouTube Music 재생 활성화")
+    else:
+        ymusic = None
 
-    logger.info("ai_music 모듈 준비 완료 (port %s, engine_ready=%s)", PORT, engine.is_ready)
+    if ENABLE_AI_DJ:
+        engine = MusicEngine()
+        await engine.initialize()
+        queue = TrackQueue()
+        dj = DJController(engine=engine, queue=queue, mixer=mixer)
+        await dj.start()
+        logger.info("AI DJ 활성화 (engine_ready=%s)", engine.is_ready)
+    else:
+        engine = None
+        queue = None
+        dj = None
+        logger.info("AI DJ 비활성화 (MUSIC_ENABLE_AI_DJ=0)")
+
+    logger.info(
+        "ai_music 모듈 준비 완료 (port %s, ytmusic=%s, ai_dj=%s)",
+        PORT, ENABLE_YTMUSIC, ENABLE_AI_DJ,
+    )
     yield
 
     logger.info("ai_music 모듈 종료 중...")
-    await dj.stop()
+    if ymusic:
+        await ymusic.stop()
+    if dj:
+        await dj.stop()
     await mixer.shutdown()
-    await engine.shutdown()
+    if engine:
+        await engine.shutdown()
 
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
@@ -166,9 +213,11 @@ async def health():
     return {
         "status": "ok",
         "module": "ai_music",
+        "ytmusic_enabled": ENABLE_YTMUSIC,
+        "ai_dj_enabled": ENABLE_AI_DJ,
         "engine_ready": engine.is_ready if engine else False,
-        "now_playing": dj.now_playing_info() if dj else None,
-        "queue_size": queue.size() if queue else 0,
+        "now_playing": ymusic.now_playing_info() if ymusic else (dj.now_playing_info() if dj else None),
+        "queue_size": len(ymusic.queue_list()) if ymusic else (queue.size() if queue else 0),
         "buffer": dj.buffer_status() if dj else None,
         "gpu": gpu,
     }
@@ -179,11 +228,14 @@ async def music_status():
     """DJ·믹서·GPU 상세 상태."""
     gpu = await engine.get_gpu_status() if engine else {}
     return {
+        "ytmusic_enabled": ENABLE_YTMUSIC,
+        "ai_dj_enabled": ENABLE_AI_DJ,
         "engine_ready": engine.is_ready if engine else False,
         "playback": mixer.get_playback_state() if mixer else None,
-        "now_playing": dj.now_playing_info() if dj else None,
+        "now_playing": ymusic.now_playing_info() if ymusic else (dj.now_playing_info() if dj else None),
+        "ymusic_queue": ymusic.queue_list() if ymusic else [],
         "buffer": dj.buffer_status() if dj else None,
-        "queue_size": queue.size() if queue else 0,
+        "queue_size": len(ymusic.queue_list()) if ymusic else (queue.size() if queue else 0),
         "gpu": gpu,
     }
 
@@ -284,6 +336,99 @@ async def queue_list():
         return {"items": [], "total": 0}
     items = queue.list_all()
     return {"items": items, "total": len(items)}
+
+
+# ── YouTube Music ─────────────────────────────────────────────────
+
+def _require_ymusic() -> YouTubeMusicPlayer:
+    if not ymusic:
+        raise HTTPException(status_code=503, detail="YouTube Music가 비활성화되어 있습니다 (YTMUSIC_ENABLED=0).")
+    return ymusic
+
+
+@app.get("/ymusic/search")
+async def ymusic_search(q: str, limit: int = 10):
+    """YouTube Music / YouTube 검색."""
+    player = _require_ymusic()
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="검색어(q)가 필요합니다.")
+    results = await player.search(q.strip(), limit=min(limit, 25))
+    return {"query": q.strip(), "results": results, "total": len(results)}
+
+
+@app.post("/ymusic/play")
+async def ymusic_play(req: YTMusicPlayRequest):
+    """검색어 또는 video_id로 즉시 재생 (재생 중이면 큐에 추가)."""
+    player = _require_ymusic()
+    if req.video_id:
+        track = await player.play_video(
+            video_id=req.video_id.strip(),
+            title=req.query or "",
+            requester=req.requester,
+        )
+    elif req.query:
+        track = await player.play_query(req.query.strip(), requester=req.requester)
+    else:
+        raise HTTPException(status_code=400, detail="query 또는 video_id 중 하나가 필요합니다.")
+
+    return {"success": True, "track": track.to_dict(), "now_playing": player.now_playing_info()}
+
+
+@app.post("/ymusic/queue")
+async def ymusic_queue(req: YTMusicQueueRequest):
+    """video_id를 재생 큐에 추가."""
+    player = _require_ymusic()
+    track = await player.enqueue(
+        video_id=req.video_id.strip(),
+        title=req.title or "",
+        artist=req.artist or "",
+        requester=req.requester,
+    )
+    return {
+        "success": True,
+        "track": track.to_dict(),
+        "queue": player.queue_list(),
+        "now_playing": player.now_playing_info(),
+    }
+
+
+@app.post("/ymusic/skip")
+async def ymusic_skip():
+    """현재 곡 스킵."""
+    player = _require_ymusic()
+    next_track = await player.skip()
+    return {
+        "success": True,
+        "next": next_track.to_dict() if next_track else None,
+        "now_playing": player.now_playing_info(),
+    }
+
+
+@app.post("/ymusic/pause")
+async def ymusic_pause():
+    player = _require_ymusic()
+    await player.pause()
+    return {"success": True, "now_playing": player.now_playing_info()}
+
+
+@app.post("/ymusic/resume")
+async def ymusic_resume():
+    player = _require_ymusic()
+    await player.resume()
+    return {"success": True, "now_playing": player.now_playing_info()}
+
+
+@app.post("/ymusic/stop")
+async def ymusic_stop():
+    player = _require_ymusic()
+    await player.stop()
+    return {"success": True, "now_playing": player.now_playing_info()}
+
+
+@app.get("/ymusic/now-playing")
+async def ymusic_now_playing():
+    player = _require_ymusic()
+    return {"now_playing": player.now_playing_info(), "queue": player.queue_list()}
 
 
 @app.websocket("/music/stream")

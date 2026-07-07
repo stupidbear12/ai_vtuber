@@ -81,6 +81,15 @@ class ChzzkOfficialChatCollector:
         # 중복 메시지 필터
         self._seen_messages: OrderedDict = OrderedDict()
         self._dedup_ttl = 60  # seconds
+        # 디버그 카운터
+        self._debug_ws_messages = 0      # WebSocket 수신 총 메시지 수
+        self._debug_chat_events = 0      # CHAT 이벤트 수
+        self._debug_self_filtered = 0    # 자기 메시지 필터링 수
+        self._debug_dedup_filtered = 0   # 중복 필터링 수
+        self._debug_dispatched = 0       # 콜백 호출 수
+        # 구독 헬스체크용
+        self._session_key: Optional[str] = None
+        self._health_check_interval = 60  # seconds
 
     async def start(self) -> None:
         """채팅 수집 루프 시작."""
@@ -167,6 +176,11 @@ class ChzzkOfficialChatCollector:
             else:
                 logger.warning(f"[ChzzkOfficial] 예상과 다른 첫 메시지: {str(first_msg)[:100]}")
 
+            # Engine.IO open 이후 Socket.IO connect 패킷을 보내야
+            # 서버가 SYSTEM connected 이벤트와 sessionKey를 내려준다.
+            await ws.send(EIO_MESSAGE + SIO_CONNECT)
+            logger.info("[ChzzkOfficial] Socket.IO connect 패킷 전송")
+
             # 5. Socket.IO connect 대기
             sio_connected = False
             subscription_done = asyncio.Event()
@@ -228,12 +242,14 @@ class ChzzkOfficialChatCollector:
                             break
 
             ping_task = asyncio.create_task(_ping_loop())
+            health_task = asyncio.create_task(self._subscription_health_check())
 
             # 7. 메시지 수신 루프
             try:
                 async for msg in ws:
                     if not self._running:
                         break
+                    self._debug_ws_messages += 1
                     if isinstance(msg, str):
                         await _handle_message(msg)
                     # binary 메시지는 무시
@@ -243,6 +259,8 @@ class ChzzkOfficialChatCollector:
                 logger.error(f"[ChzzkOfficial] WebSocket 수신 오류: {e}")
             finally:
                 ping_task.cancel()
+                health_task.cancel()
+                self._session_key = None
                 await self._close_ws()
 
     async def _handle_event(self, event_name: str, data, subscription_done: asyncio.Event):
@@ -262,14 +280,17 @@ class ChzzkOfficialChatCollector:
 
             if event_type == "connected":
                 session_key = (parsed.get("data") or {}).get("sessionKey", "")
+                logger.info(f"[ChzzkOfficial] connected data keys: {list(parsed.get('data', {}).keys()) if isinstance(parsed.get('data'), dict) else 'N/A'}, sessionKey={'YES' if session_key else 'EMPTY'}")
                 if session_key:
                     await self._subscribe_with_key(session_key)
                 else:
+                    logger.warning("[ChzzkOfficial] sessionKey 없음 → _subscribe_all_events 호출")
                     await self._subscribe_all_events()
                 subscription_done.set()
 
         elif event_name == "CHAT":
-            logger.debug(f"[ChzzkOfficial] CHAT 이벤트 수신")
+            self._debug_chat_events += 1
+            logger.debug(f"[ChzzkOfficial] CHAT 이벤트 수신 (총 {self._debug_chat_events}건)")
             self._dispatch(data, is_donation=False)
 
         elif event_name == "DONATION":
@@ -294,16 +315,88 @@ class ChzzkOfficialChatCollector:
             except Exception as e:
                 logger.debug(f"[ChzzkOfficial] WebSocket 해제 중 오류 (무시): {e}")
 
-    async def _subscribe_with_key(self, session_key: str) -> None:
+    async def _subscribe_with_key(self, session_key: str, max_retries: int = 3) -> None:
         """주어진 세션 키로 채팅/후원/구독 이벤트를 모두 구독."""
-        try:
-            logger.info(f"[ChzzkOfficial] 세션 키 {session_key[:12]}... 로 이벤트 구독 시작")
-            await self._client.subscribe_chat(session_key)
-            await self._client.subscribe_donation(session_key)
-            await self._client.subscribe_subscription(session_key)
-            logger.info("[ChzzkOfficial] 채팅/후원/구독 이벤트 구독 완료")
-        except Exception as e:
-            logger.error(f"[ChzzkOfficial] 이벤트 구독 실패: {e}")
+        self._debug_subscribe_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"[ChzzkOfficial] 세션 키 {session_key[:12]}... 이벤트 구독 시도 ({attempt}/{max_retries})")
+                await self._client.subscribe_chat(session_key)
+                await self._client.subscribe_donation(session_key)
+                await self._client.subscribe_subscription(session_key)
+                logger.info("[ChzzkOfficial] 채팅/후원/구독 이벤트 구독 완료")
+                self._debug_subscribe_error = "OK"
+                self._session_key = session_key
+                return
+            except Exception as e:
+                self._debug_subscribe_error = f"attempt {attempt}: {e}"
+                logger.error(f"[ChzzkOfficial] 이벤트 구독 실패 (시도 {attempt}/{max_retries}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(2 * attempt)
+        logger.error("[ChzzkOfficial] 이벤트 구독 최종 실패 — 채팅 수신 불가")
+
+    # ── 구독 헬스체크 ──────────────────────────────────────────────
+
+    _REQUIRED_EVENTS = {"CHAT", "DONATION", "SUBSCRIPTION"}
+
+    async def _subscription_health_check(self) -> None:
+        """주기적으로 구독 상태를 확인하고 누락된 이벤트를 자동 재구독."""
+        # 첫 구독 완료 후 체크 시작하도록 초기 대기
+        await asyncio.sleep(self._health_check_interval)
+
+        while self._running:
+            session_key = self._session_key
+            if not session_key:
+                await asyncio.sleep(self._health_check_interval)
+                continue
+
+            try:
+                events = await self._client.get_session_events(session_key)
+                # events: list of dicts or strings — 이벤트 타입 추출
+                subscribed: set = set()
+                for ev in events:
+                    if isinstance(ev, dict):
+                        subscribed.add(ev.get("eventType", "").upper())
+                    elif isinstance(ev, str):
+                        subscribed.add(ev.upper())
+
+                missing = self._REQUIRED_EVENTS - subscribed
+                if not missing:
+                    logger.debug(
+                        f"[ChzzkOfficial] 구독 헬스체크 OK: {sorted(subscribed)}"
+                    )
+                else:
+                    logger.warning(
+                        f"[ChzzkOfficial] 구독 누락 감지: {sorted(missing)} "
+                        f"(현재 구독: {sorted(subscribed)})"
+                    )
+                    await self._resubscribe_missing(session_key, missing)
+
+            except Exception as e:
+                logger.error(f"[ChzzkOfficial] 구독 헬스체크 오류: {e}")
+
+            await asyncio.sleep(self._health_check_interval)
+
+    async def _resubscribe_missing(self, session_key: str, missing: set) -> None:
+        """누락된 이벤트만 선택적으로 재구독."""
+        subscribe_map = {
+            "CHAT": self._client.subscribe_chat,
+            "DONATION": self._client.subscribe_donation,
+            "SUBSCRIPTION": self._client.subscribe_subscription,
+        }
+        for event_type in sorted(missing):
+            fn = subscribe_map.get(event_type)
+            if not fn:
+                continue
+            try:
+                await fn(session_key)
+                logger.info(
+                    f"[ChzzkOfficial] 재구독 성공: {event_type}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[ChzzkOfficial] 재구독 실패: {event_type} — {e}"
+                )
 
     async def _subscribe_all_events(self) -> None:
         """활성 세션 키를 조회 후 채팅/후원/구독 이벤트를 모두 구독."""
@@ -346,12 +439,20 @@ class ChzzkOfficialChatCollector:
         """단일 이벤트 항목 파싱."""
         from app.chat_collector import ChatMessage
 
-        # ── 자기 자신의 메시지 무시 (무한 루프 방지) ──
+        # ── 봇 자신의 응답 메시지만 무시 (무한 루프 방지) ──
+        # 기존: senderChannelId == channelId로 방송자의 모든 메시지를 차단 → 수정
+        # 봇 응답은 "[시온]" 접두사를 가지므로, content 기반으로만 필터링한다.
+        # 추가 자문자답 방지는 chat_collector._enqueue의 _is_own_message()에서 처리.
         my_channel_id = item.get("channelId", "")
         sender_id = item.get("senderChannelId", "")
+        content = item.get("content", "") or ""
         if sender_id and my_channel_id and sender_id == my_channel_id:
-            logger.debug(f"[ChzzkOfficial] 자기 메시지 무시: {item.get('content', '')[:30]}")
-            return
+            if content.startswith("[시온]"):
+                self._debug_self_filtered += 1
+                logger.debug(f"[ChzzkOfficial] 봇 응답 무시: {content[:30]}")
+                return
+            # 방송자 본인의 일반 채팅은 통과시킨다
+            logger.debug(f"[ChzzkOfficial] 방송자 채팅 통과: {content[:30]}")
 
         # ── 중복 메시지 필터 (동일 이벤트 다중 수신 방지) ──
         dedup_key = hashlib.md5(
@@ -388,6 +489,7 @@ class ChzzkOfficialChatCollector:
         if not text:
             return
 
+        self._debug_dispatched += 1
         self._on_message(
             ChatMessage(
                 platform="chzzk",
