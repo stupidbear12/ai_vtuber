@@ -125,53 +125,53 @@ class ChatFilter:
 
 # ─── 유튜브 채팅 수집기 ──────────────────────────────────────────
 
-class YouTubeChatCollector:
-    """pytchat 기반 유튜브 라이브 채팅 수집기 (API 키 불필요)."""
+# class YouTubeChatCollector:
+#     """pytchat 기반 유튜브 라이브 채팅 수집기 (API 키 불필요)."""
 
-    def __init__(self, video_id: str, on_message: Callable[[ChatMessage], None]):
-        self._video_id = video_id
-        self._on_message = on_message
-        self._running = False
+#     def __init__(self, video_id: str, on_message: Callable[[ChatMessage], None]):
+#         self._video_id = video_id
+#         self._on_message = on_message
+#         self._running = False
 
-    async def start(self) -> None:
-        try:
-            import pytchat
-        except ImportError:
-            raise ImportError("pytchat 설치 필요: pip install pytchat")
+#     async def start(self) -> None:
+#         try:
+#             import pytchat
+#         except ImportError:
+#             raise ImportError("pytchat 설치 필요: pip install pytchat")
 
-        self._running = True
-        logger.info(f"[YouTube] 채팅 수집 시작: video_id={self._video_id}")
+#         self._running = True
+#         logger.info(f"[YouTube] 채팅 수집 시작: video_id={self._video_id}")
 
-        loop = asyncio.get_event_loop()
-        chat = await loop.run_in_executor(
-            None, lambda: pytchat.create(video_id=self._video_id)
-        )
+#         loop = asyncio.get_event_loop()
+#         chat = await loop.run_in_executor(
+#             None, lambda: pytchat.create(video_id=self._video_id)
+#         )
 
-        while self._running:
-            if not chat.is_alive():
-                logger.info("[YouTube] 방송이 종료되었습니다.")
-                break
+#         while self._running:
+#             if not chat.is_alive():
+#                 logger.info("[YouTube] 방송이 종료되었습니다.")
+#                 break
 
-            data = await loop.run_in_executor(None, chat.get)
-            for c in data.sync_items():
-                if not self._running:
-                    break
-                is_donation = hasattr(c, "amount") and c.amount
-                self._on_message(ChatMessage(
-                    platform="youtube",
-                    author=c.author.name,
-                    message=c.message,
-                    is_donation=bool(is_donation),
-                ))
+#             data = await loop.run_in_executor(None, chat.get)
+#             for c in data.sync_items():
+#                 if not self._running:
+#                     break
+#                 is_donation = hasattr(c, "amount") and c.amount
+#                 self._on_message(ChatMessage(
+#                     platform="youtube",
+#                     author=c.author.name,
+#                     message=c.message,
+#                     is_donation=bool(is_donation),
+#                 ))
 
-            await asyncio.sleep(1.0)
+#             await asyncio.sleep(1.0)
 
-        self._running = False
-        logger.info("[YouTube] 채팅 수집 종료")
+#         self._running = False
+#         logger.info("[YouTube] 채팅 수집 종료")
 
-    def stop(self) -> None:
-        self._running = False
-        logger.info("[YouTube] 수집 중지 요청")
+#     def stop(self) -> None:
+#         self._running = False
+#         logger.info("[YouTube] 수집 중지 요청")
 
 
 # ─── 치지직 채팅 수집기 ──────────────────────────────────────────
