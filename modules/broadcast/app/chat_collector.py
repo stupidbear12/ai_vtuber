@@ -38,6 +38,13 @@ RADIO_IDLE_SECONDS = int(os.environ.get("RADIO_IDLE_SECONDS", "30"))      # 채�
 RADIO_INTERVAL_MIN = int(os.environ.get("RADIO_INTERVAL_MIN", "20"))      # 라디오 멘트 최소 간격 (초)
 RADIO_INTERVAL_MAX = int(os.environ.get("RADIO_INTERVAL_MAX", "60"))      # 라디오 멘트 최대 간격 (초)
 
+# ── YouTube Music 채팅 명령 ─────────────────────────────────────
+MUSIC_PLAY_PREFIXES = ("!play ", "!음악 ", "!노래 ")
+MUSIC_SKIP_COMMANDS = frozenset({"!skip", "!스킵", "!다음", "!next"})
+MUSIC_STOP_COMMANDS = frozenset({"!stop", "!정지", "!음악정지"})
+MUSIC_PAUSE_COMMANDS = frozenset({"!pause", "!일시정지"})
+MUSIC_RESUME_COMMANDS = frozenset({"!resume", "!재개"})
+
 RADIO_PROMPTS = [
     "현재 재생 중인 곡에 대해 이야기해주세요",
     "시청자들에게 인사하고 채팅을 유도해주세요",
@@ -224,16 +231,18 @@ class ChzzkChatCollector:
     연결이 끊기면 자동으로 재연결을 시도한다.
     """
 
-    # 치지직 WebSocket 명령 코드 (비공식 역공학)
-    # 참고: 치지직은 네이버 NBASE 채팅 WebSocket 프로토콜을 사용함
-    _CMD_PING = 0             # 핑/heartbeat — cmd=0은 연결 유지용으로도 사용됨
-    _CMD_WORKER = 0           # 워커 연결 요청 (초기 핸드셰이크)
-    _CMD_WORKER_RESULT = 5    # 워커 연결 결과 (sid 포함)
-    _CMD_CONNECT = 100        # 채팅 채널 구독 요청
-    _CMD_CONNECTED = 10000    # 채팅 채널 구독 완료
-    _CMD_CHAT = 10100         # 일반 채팅 메시지
-    _CMD_DONATION = 10101     # 후원 (치즈)
-    _CMD_SUBSCRIPTION = 10103 # 구독 알림
+    # 치지직 WebSocket 명령 코드 (NBASE 채팅 프로토콜, 2024+)
+    _CMD_PING = 0
+    _CMD_WORKER = 0
+    _CMD_WORKER_RESULT = 5
+    _CMD_CONNECT = 100
+    _CMD_PONG = 10000
+    _CMD_CONNECTED = 10100       # CONNECT(100) 응답 — bdy.sid 저장 필요
+    _CMD_REQUEST_RECENT_CHAT = 5101
+    _CMD_RECENT_CHAT = 15101
+    _CMD_CHAT = 93101
+    _CMD_DONATION = 93102
+    _CMD_SUBSCRIPTION = 93102    # 후원/구독 동일 cmd, msgTypeCode로 구분
 
     def __init__(self, channel_id: str, on_message: Callable[[ChatMessage], None]):
         """
@@ -244,6 +253,7 @@ class ChzzkChatCollector:
         self._channel_id = channel_id
         self._on_message = on_message
         self._running = False
+        self._sid = ""
 
     async def _get_chat_channel_id(self) -> str:
         """치지직 채널 ID로 chatChannelId 조회.
@@ -332,27 +342,31 @@ class ChzzkChatCollector:
             self._running = False
             return
 
+        import inspect
         import websockets
+
+        ws_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Origin": "https://chzzk.naver.com",
+        }
+        connect_kwargs: dict = {"ping_interval": None}
+        if "additional_headers" in inspect.signature(websockets.connect).parameters:
+            connect_kwargs["additional_headers"] = ws_headers
+        else:
+            connect_kwargs["extra_headers"] = ws_headers
 
         while self._running:
             # 치지직은 kr-ss1 ~ kr-ss9 중 랜덤 선택
             n = random.randint(1, 9)
             ws_url = f"wss://kr-ss{n}.chat.naver.com/chat"
             try:
-                async with websockets.connect(
-                    ws_url,
-                    ping_interval=None,   # 수동 핑 관리
-                    extra_headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-                        ),
-                        "Origin": "https://chzzk.naver.com",
-                    },
-                ) as ws:
+                async with websockets.connect(ws_url, **connect_kwargs) as ws:
                     logger.info(f"[Chzzk] WebSocket 연결: {ws_url}")
                     tid = [1]
-                    sid = ""
+                    self._sid = ""
 
                     # Step 1: defaultWorker 연결 요청
                     await ws.send(self._build_msg(
@@ -362,12 +376,12 @@ class ChzzkChatCollector:
                     ))
                     tid[0] += 1
 
-                    # Step 2: WORKER_RESULT 수신 → sid 추출
+                    # Step 2: WORKER_RESULT 수신 → sid 추출 (선택)
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
                         resp_data = json.loads(raw)
                         if resp_data.get("cmd") == self._CMD_WORKER_RESULT:
-                            sid = (resp_data.get("bdy") or {}).get("sid", "")
+                            self._sid = (resp_data.get("bdy") or {}).get("sid", "")
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.debug(f"[Chzzk] WORKER_RESULT 수신 생략: {e}")
 
@@ -375,11 +389,13 @@ class ChzzkChatCollector:
                     await ws.send(self._build_msg(
                         cmd=self._CMD_CONNECT,
                         cid=chat_channel_id,
-                        sid=sid,
+                        sid=self._sid,
                         tid=tid[0],
                         bdy={"devType": 2001, "auth": "READ", "uid": None},
                     ))
                     tid[0] += 1
+
+                    recent_requested = False
 
                     # Step 4: 20초 간격 핑 태스크 (연결 유지)
                     async def _ping_loop():
@@ -388,11 +404,10 @@ class ChzzkChatCollector:
                             if not self._running:
                                 break
                             try:
-                                # _CMD_PING(0)으로 서버에 heartbeat 전송
                                 await ws.send(self._build_msg(
                                     cmd=self._CMD_PING,
                                     cid=chat_channel_id,
-                                    sid=sid,
+                                    sid=self._sid,
                                     tid=tid[0],
                                 ))
                                 tid[0] += 1
@@ -406,6 +421,17 @@ class ChzzkChatCollector:
                         while self._running:
                             raw = await asyncio.wait_for(ws.recv(), timeout=60.0)
                             await self._dispatch(raw)
+                            if self._sid and not recent_requested:
+                                await ws.send(self._build_msg(
+                                    cmd=self._CMD_REQUEST_RECENT_CHAT,
+                                    cid=chat_channel_id,
+                                    sid=self._sid,
+                                    tid=tid[0],
+                                    bdy={"recentMessageCount": 50},
+                                ))
+                                tid[0] += 1
+                                recent_requested = True
+                                logger.info("[Chzzk] 최근 채팅 요청 전송")
                     except asyncio.TimeoutError:
                         logger.warning("[Chzzk] 수신 타임아웃, 재연결 시도...")
                     except Exception as e:
@@ -435,8 +461,18 @@ class ChzzkChatCollector:
         cmd = data.get("cmd")
         bdy = data.get("bdy", {})
 
-        if cmd == self._CMD_CHAT:
+        if cmd == self._CMD_CONNECTED:
+            if isinstance(bdy, dict):
+                sid = bdy.get("sid", "")
+                if sid:
+                    self._sid = sid
+                    logger.info("[Chzzk] 채널 구독 완료 (sid=%s...)", sid[:12])
+            return
+
+        if cmd in (self._CMD_CHAT, self._CMD_RECENT_CHAT):
             # 일반 채팅 메시지
+            if isinstance(bdy, dict) and "messageList" in bdy:
+                bdy = bdy.get("messageList") or []
             items = bdy if isinstance(bdy, list) else ([bdy] if bdy else [])
             for item in items:
                 self._process_item(item, is_donation=False)
@@ -462,7 +498,7 @@ class ChzzkChatCollector:
                 else profile_raw
             )
             nickname = (profile or {}).get("nickname", "시청자")
-            text = item.get("msg", "")
+            text = item.get("msg") or item.get("content") or ""
             if not text:
                 return
             self._on_message(ChatMessage(
@@ -489,7 +525,7 @@ class BroadcastChatManager:
       1. 채팅 수집 (치지직 공식 Session API 또는 비공식 WebSocket / 유튜브 pytchat)
       2. 채팅 선별 (키워드, 후원, 랜덤 확률)
       3. ai_chat POST /chat → 시온 응답 + 감정 태그
-      3.5. Chzzk 채팅창에 시온 응답 전송 (공식 API, 선택)
+      3.5. Chzzk 채팅창 전송 (BROADCAST_CHZZK_SEND_CHAT=1 일 때만)
       4. ai_voice POST /voice/tts → TTS 음성 (WAV, GPT-SoVITS)
       5. ai_live2d POST /live2d/emotion → 표정 변경
     """
@@ -499,6 +535,7 @@ class BroadcastChatManager:
         chat_url: str = "http://localhost:8002",
         live2d_url: str = "http://localhost:8001",
         voice_url: str = "http://localhost:8004",
+        music_url: str = "http://localhost:8005",
         chzzk_client=None,
     ):
         """
@@ -506,14 +543,22 @@ class BroadcastChatManager:
             chat_url: ai_chat 서버 URL (기본: http://localhost:8002)
             live2d_url: ai_live2d 서버 URL (기본: http://localhost:8001)
             voice_url: ai_voice 서버 URL (기본: http://localhost:8004)
+            music_url: ai_music 서버 URL (기본: http://localhost:8005)
             chzzk_client: ChzzkClient 인스턴스 (공식 API 사용 시). None이면 비공식 사용.
         """
         # 환경변수로 URL 오버라이드 가능
         self._chat_url = os.environ.get("AI_CHAT_URL", chat_url).rstrip("/")
         self._live2d_url = os.environ.get("AI_LIVE2D_URL", live2d_url).rstrip("/")
         self._voice_url = os.environ.get("AI_VOICE_URL", voice_url).rstrip("/")
+        self._music_url = os.environ.get("AI_MUSIC_URL", music_url).rstrip("/")
+        self._music_commands_enabled = os.environ.get(
+            "BROADCAST_MUSIC_COMMANDS", "1"
+        ).lower() in ("true", "1", "yes")
         self._voice_enabled = os.environ.get(
             "BROADCAST_VOICE_ENABLED", "true"
+        ).lower() in ("true", "1", "yes")
+        self._chzzk_send_chat = os.environ.get(
+            "BROADCAST_CHZZK_SEND_CHAT", "0"
         ).lower() in ("true", "1", "yes")
 
         # 공식 Chzzk API 클라이언트 (Access Token이 있을 때만 유효)
@@ -570,13 +615,97 @@ class BroadcastChatManager:
             return True
         # 시온 봇 계정의 닉네임으로 보낸 메시지
         # BOT_CHZZK_NICKNAME 환경변수로 커스터마이즈 가능
-        bot_nicknames = {"시온", "sion", "그거하지말자"}
+        bot_nicknames = {"시온", "sion"}
         extra = os.environ.get("BOT_CHZZK_NICKNAME", "")
         if extra:
             bot_nicknames.add(extra)
         if msg.author in bot_nicknames:
             return True
         return False
+
+    def _is_music_command(self, msg: ChatMessage) -> bool:
+        """YouTube Music 채팅 명령 여부."""
+        if not self._music_commands_enabled:
+            return False
+        text = msg.message.strip()
+        text_lower = text.lower()
+        for prefix in MUSIC_PLAY_PREFIXES:
+            if text_lower.startswith(prefix.lower()):
+                return True
+        all_cmds = (
+            MUSIC_SKIP_COMMANDS
+            | MUSIC_STOP_COMMANDS
+            | MUSIC_PAUSE_COMMANDS
+            | MUSIC_RESUME_COMMANDS
+        )
+        return text_lower in all_cmds
+
+    async def _handle_music_command(self, msg: ChatMessage) -> None:
+        """채팅 명령으로 YouTube Music 제어."""
+        text = msg.message.strip()
+        text_lower = text.lower()
+
+        for prefix in MUSIC_PLAY_PREFIXES:
+            if text_lower.startswith(prefix.lower()):
+                query = text[len(prefix):].strip()
+                if not query:
+                    logger.info("[MusicCmd] 재생 명령에 검색어 없음: %s", msg.author)
+                    return
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            f"{self._music_url}/ymusic/play",
+                            json={"query": query, "requester": msg.author},
+                            timeout=aiohttp.ClientTimeout(total=120.0),
+                        ) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                track = (data.get("track") or {})
+                                logger.info(
+                                    "[MusicCmd] 재생: %s — %s (by %s)",
+                                    track.get("artist", "?"),
+                                    track.get("title", query),
+                                    msg.author,
+                                )
+                            else:
+                                body = await resp.text()
+                                logger.warning(
+                                    "[MusicCmd] 재생 실패 HTTP %s: %s",
+                                    resp.status, body[:200],
+                                )
+                except Exception as exc:
+                    logger.warning("[MusicCmd] ai_music 연결 실패: %s", exc)
+                return
+
+        endpoint = None
+        if text_lower in MUSIC_SKIP_COMMANDS:
+            endpoint = "/ymusic/skip"
+        elif text_lower in MUSIC_STOP_COMMANDS:
+            endpoint = "/ymusic/stop"
+        elif text_lower in MUSIC_PAUSE_COMMANDS:
+            endpoint = "/ymusic/pause"
+        elif text_lower in MUSIC_RESUME_COMMANDS:
+            endpoint = "/ymusic/resume"
+
+        if not endpoint:
+            return
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._music_url}{endpoint}",
+                    timeout=aiohttp.ClientTimeout(total=30.0),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.warning(
+                            "[MusicCmd] %s 실패 HTTP %s: %s",
+                            endpoint, resp.status, body[:200],
+                        )
+                    else:
+                        logger.info("[MusicCmd] %s by %s", endpoint, msg.author)
+        except Exception as exc:
+            logger.warning("[MusicCmd] ai_music 연결 실패: %s", exc)
 
     def _enqueue(self, msg: ChatMessage) -> None:
         """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
@@ -595,6 +724,11 @@ class BroadcastChatManager:
         self._buffer.add(msg)  # 히스토리 버퍼에 추가
         self._last_activity_time = time.time()  # 라디오 모드 idle 타이머 리셋
         logger.info(f"[ChatManager] 채팅 수신: {msg.author}: {msg.message[:40]}")
+
+        if self._is_music_command(msg):
+            if self._loop is not None:
+                self._loop.create_task(self._handle_music_command(msg))
+            return
 
         if self._filter.should_respond(msg):
             logger.info(f"[ChatManager] 응답 대상: {msg.author}: {msg.message[:30]}")
@@ -685,9 +819,10 @@ class BroadcastChatManager:
             f"{msg.message[:30]} → [{emotion}] {reply_text[:50]}"
         )
 
-        # ── Step 2.5: Chzzk 채팅창에 시온 응답 전송 (공식 API) ─────
+        # ── Step 2.5: Chzzk 채팅창 전송 (기본 비활성) ─────────────
         if (
-            self._chzzk_client
+            self._chzzk_send_chat
+            and self._chzzk_client
             and self._platform == "chzzk"
             and reply_text
             and self._chzzk_client.has_token()
@@ -901,7 +1036,6 @@ class BroadcastChatManager:
                     logger.warning(f"[RadioMode] ai_live2d 연결 실패 (무시): {e}")
 
                 self.stats["radio_talks"] += 1
-                self._last_activity_time = time.time()  # 라디오 멘트도 활동으로 간주
                 logger.info(f"[RadioMode] 라디오 멘트 완료: [{emotion}] {reply_text[:50]}")
 
             except asyncio.CancelledError:
@@ -910,6 +1044,9 @@ class BroadcastChatManager:
                 logger.error(f"[RadioMode] 라디오 멘트 생성 실패: {e}")
             finally:
                 self._radio_active = False
+                # 성공/실패 모두 활동 시간 갱신 → tight retry loop 방지
+                # (다음 시도까지 최소 RADIO_IDLE_SECONDS 만큼 대기)
+                self._last_activity_time = time.time()
 
             # 다음 라디오 멘트까지 랜덤 대기
             wait_seconds = random.randint(RADIO_INTERVAL_MIN, RADIO_INTERVAL_MAX)
@@ -922,6 +1059,30 @@ class BroadcastChatManager:
                 except asyncio.CancelledError:
                     return
             # 대기 중 채팅이 들어왔으면 idle 타이머 자연 리셋됨
+
+    async def _radio_worker_safe(self) -> None:
+        """라디오 워커 래퍼 — crash 시 자동 재시작.
+
+        _radio_worker에서 예상치 못한 예외가 발생해 Task가 죽으면
+        5초 대기 후 자동 재시작한다.
+        """
+        while self._running:
+            try:
+                await self._radio_worker()
+                break  # 정상 종료 (_running=False로 빠진 경우)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(
+                    f"[RadioMode] 워커 crash 감지 → 5초 후 재시작: {e}",
+                    exc_info=True,
+                )
+                self._radio_active = False
+                try:
+                    await asyncio.sleep(5.0)
+                except asyncio.CancelledError:
+                    break
+        logger.info("[RadioMode] 워커 안전 종료")
 
     async def start(self, platform: str, channel_id: str) -> None:
         """채팅 수집을 시작한다.
@@ -970,7 +1131,7 @@ class BroadcastChatManager:
         # 수집 태스크, 응답 워커, 라디오 워커 태스크를 동시에 시작
         self._collect_task = asyncio.create_task(self._collector.start())
         self._worker_task = asyncio.create_task(self._response_worker())
-        self._radio_task = asyncio.create_task(self._radio_worker())
+        self._radio_task = asyncio.create_task(self._radio_worker_safe())
 
         logger.info(
             f"[ChatManager] 방송 채팅 수집 시작: "
@@ -1020,10 +1181,22 @@ class BroadcastChatManager:
             if self._last_activity_time > 0
             else 0.0
         )
+        collect_error = None
+        if self._collect_task and self._collect_task.done():
+            try:
+                exc = self._collect_task.exception()
+            except asyncio.CancelledError:
+                exc = None
+            if exc:
+                collect_error = str(exc)
+
         return {
             "running": self._running,
             "platform": self._platform,
             "channel_id": self._channel_id,
+            "collector": type(self._collector).__name__ if self._collector else None,
+            "collect_task_done": self._collect_task.done() if self._collect_task else None,
+            "collect_task_error": collect_error,
             "stats": dict(self.stats),
             "buffer_size": len(self._buffer),
             "queue_size": self._queue.qsize(),
@@ -1034,4 +1207,12 @@ class BroadcastChatManager:
             "chzzk_official_api": bool(self._chzzk_client and self._chzzk_client.has_token()),
             "radio_mode": self._radio_active,
             "last_activity": round(seconds_since_activity, 1),
+            "debug_ws": {
+                "ws_messages": getattr(self._collector, '_debug_ws_messages', None),
+                "chat_events": getattr(self._collector, '_debug_chat_events', None),
+                "self_filtered": getattr(self._collector, '_debug_self_filtered', None),
+                "dedup_filtered": getattr(self._collector, '_debug_dedup_filtered', None),
+                "dispatched": getattr(self._collector, '_debug_dispatched', None),
+                "subscribe_result": getattr(self._collector, '_debug_subscribe_error', None),
+            } if self._collector else None,
         }

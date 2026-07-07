@@ -25,3 +25,7 @@ torchaudio>=2.0
 
 # === HTTP 클라이언트 (ACE-Step REST API 호출) ===
 aiohttp>=3.9
+
+# === YouTube Music 재생 ===
+yt-dlp>=2024.1
+ytmusicapi>=1.5

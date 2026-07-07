@@ -72,6 +72,13 @@ training/*.log
 training/*.txt
 training/__pycache__/
 
+# modules/training — 대용량 데이터/모델 제외 (스크립트만 추적)
+modules/training/data/
+modules/training/output/
+modules/training/*.txt
+modules/training/*.log
+!modules/training/run_krew_train.bat
+
 # Broadcast 토큰 (민감 정보)
 modules/broadcast/app/chzzk_tokens.json
 
