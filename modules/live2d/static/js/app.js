@@ -111,6 +111,7 @@ async function initPixi() {
     antialias:       true,
     autoDensity:     true,
     resolution:      window.devicePixelRatio || 1,
+    preference:      'webgl',   // OBS CEF WebGPU 미지원 대비
   });
 
   if (isTransparent || isChromakey) {

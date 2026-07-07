@@ -22,6 +22,24 @@ class Live2DWSClient {
     this._currentAudio  = null;
     this._lipsyncTimer  = null;
     this._lipsyncCtx    = null;
+
+    // OBS Browser Source 자동재생 허용을 위한 AudioContext 워밍업
+    this._warmupAudioContext();
+  }
+
+  /** OBS CEF에서 AudioContext를 미리 resume해둔다 */
+  _warmupAudioContext() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(() => {
+          console.log('[WS] AudioContext warmed up:', ctx.state);
+          ctx.close();
+        }).catch(() => ctx.close());
+      } else {
+        ctx.close();
+      }
+    } catch (_) {}
   }
 
   connect() { this._try(); }
@@ -182,11 +200,6 @@ class Live2DWSClient {
       const audio = new Audio(url);
       this._currentAudio = audio;
 
-      // 재생 시작 -> 립싱크 시작
-      audio.addEventListener('play', () => {
-        this._startLipsync(audio);
-      });
-
       // 재생 종료 -> 립싱크 정지 + 자막 숨김
       audio.addEventListener('ended', () => {
         this._stopLipsync();
@@ -202,57 +215,66 @@ class Live2DWSClient {
         URL.revokeObjectURL(url);
       });
 
-      audio.play().catch(err => {
-        console.warn('[Speak] autoplay blocked:', err.message);
-        this._hideSubtitle();
-      });
+      // AudioContext + 립싱크를 먼저 설정한 뒤 재생
+      // (createMediaElementSource가 오디오 출력을 AudioContext로 리라우트하므로
+      //  context가 running 상태여야 소리가 남)
+      this._setupAndPlay(audio, url);
 
     } catch (err) {
       console.error('[Speak] audio processing error:', err);
     }
   }
 
-  /**
-   * Web Audio API AnalyserNode로 음량 측정 -> mouth 립싱크
-   */
-  _startLipsync(audioEl) {
-    this._stopLipsync();
-
+  async _setupAndPlay(audio, blobUrl) {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = ctx.createMediaElementSource(audioEl);
+      // OBS CEF suspended 상태 대비
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+      const source = ctx.createMediaElementSource(audio);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
       analyser.connect(ctx.destination);
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      this._lipsyncCtx = ctx;
 
+      // 립싱크 루프
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const update = () => {
         if (!this._currentAudio) return;
-
         analyser.getByteFrequencyData(dataArray);
-        // 저주파~중주파 대역 평균 에너지 -> 0.0~1.0 범위
         let sum = 0;
         const count = Math.min(32, dataArray.length);
         for (let i = 0; i < count; i++) sum += dataArray[i];
         const avg = sum / count / 255;
         const mouth = Math.min(1.0, avg * 1.8);
         this._anim.setMouth(mouth);
-
         this._lipsyncTimer = requestAnimationFrame(update);
       };
 
+      // 재생
+      await audio.play();
       this._lipsyncTimer = requestAnimationFrame(update);
-      this._lipsyncCtx = ctx;
+      console.log('[Speak] playing with lipsync, ctx:', ctx.state);
+
     } catch (err) {
-      // Web Audio API 미지원 시 단순 on/off 립싱크 폴백
-      console.warn('[Speak] Web Audio lipsync unavailable, using timer fallback:', err);
-      let open = true;
-      this._lipsyncTimer = setInterval(() => {
-        this._anim.setMouth(open ? 0.6 : 0.1);
-        open = !open;
-      }, 150);
+      console.warn('[Speak] AudioContext lipsync failed, trying direct play:', err.message);
+      // AudioContext 실패 시 직접 재생 폴백 (립싱크 없이)
+      try {
+        await audio.play();
+        // 타이머 기반 단순 립싱크 폴백
+        let open = true;
+        this._lipsyncTimer = setInterval(() => {
+          this._anim.setMouth(open ? 0.6 : 0.1);
+          open = !open;
+        }, 150);
+        console.log('[Speak] playing with timer-based lipsync fallback');
+      } catch (e2) {
+        console.error('[Speak] autoplay completely blocked:', e2.message);
+        this._hideSubtitle();
+      }
     }
   }
 
