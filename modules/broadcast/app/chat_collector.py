@@ -21,7 +21,7 @@ import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Deque, List, Optional
+from typing import Callable, Deque, Optional
 
 import aiohttp
 

@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-AudioMixer — 실시간 오디오 믹싱 및 스트림 출력
+AudioMixer — 실시간 오디오 재생 및 스트림 출력
 
 역할:
-  - 트랙 간 크로스페이드 트랜지션
-  - BPM 매칭 (타임스트레칭)
+  - 오디오 파일 로드·재생·일시정지·정지
   - 실시간 PCM 스트림 생성 (WebSocket 클라이언트용)
-  - 오디오 이펙트 (페이드인/아웃, 볼륨)
+  - 시스템 오디오 출력 (sounddevice, OBS 데스크탑 오디오 캡처용)
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+import os
+import queue
 from pathlib import Path
 from typing import Optional, Set
 
@@ -24,56 +24,21 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 try:
-    import librosa
-except ImportError:  # pragma: no cover
-    librosa = None
-
-try:
     from pydub import AudioSegment
 except ImportError:  # pragma: no cover
     AudioSegment = None
 
-
-@dataclass
-class AudioChunk:
-    """오디오 청크 단위."""
-    data: np.ndarray        # shape: (samples, channels), dtype: float32
-    sample_rate: int = 44100
-    channels: int = 2
-
-
-@dataclass
-class PlaybackState:
-    """현재 재생 상태."""
-    track_path: Optional[Path] = None
-    position_sec: float = 0.0
-    duration_sec: float = 0.0
-    volume: float = 1.0
-    is_playing: bool = False
-
-
-@dataclass
-class _CrossfadeState:
-    next_audio: np.ndarray
-    next_path: Path
-    total_samples: int
-    remaining: int
-    next_pos: int = 0
-
-
-@dataclass
-class _FadeState:
-    kind: str               # "in" | "out"
-    total_samples: int
-    remaining: int
-    start_gain: float
-    end_gain: float
+try:
+    import sounddevice as sd
+except ImportError:  # pragma: no cover
+    sd = None
 
 
 class AudioMixer:
-    """실시간 오디오 믹싱 엔진.
+    """오디오 재생 엔진.
 
-    WebSocket 구독자에게 int16 PCM(stereo interleaved)을 전송한다.
+    WebSocket 구독자에게 int16 PCM(stereo interleaved)을 전송하고,
+    시스템 오디오로도 동시 출력한다.
     """
 
     def __init__(self, sample_rate: int = 44100, channels: int = 2, chunk_size: int = 4096):
@@ -81,16 +46,23 @@ class AudioMixer:
         self._channels = channels
         self._chunk_size = chunk_size
         self._subscribers: Set[WebSocket] = set()
-        self._playback = PlaybackState()
         self._stream_task: Optional[asyncio.Task] = None
         self._shutdown = False
         self._lock = asyncio.Lock()
 
+        # 재생 상태
         self._audio: Optional[np.ndarray] = None
         self._sample_pos: int = 0
-        self._crossfade: Optional[_CrossfadeState] = None
-        self._fade: Optional[_FadeState] = None
-        self._chunk_gain: float = 1.0
+        self._track_path: Optional[Path] = None
+        self._duration_sec: float = 0.0
+        self._position_sec: float = 0.0
+        self._volume: float = 1.0
+        self._is_playing: bool = False
+
+        # 시스템 오디오 출력 (sounddevice callback 방식)
+        self._sd_stream: Optional[object] = None
+        self._sd_buffer: Optional[queue.Queue] = None
+        self._use_system_audio = os.environ.get("MUSIC_SYSTEM_AUDIO", "1") == "1"
 
     # ── 라이프사이클 ──────────────────────────────────────────────
 
@@ -99,15 +71,24 @@ class AudioMixer:
         self._shutdown = False
         if self._stream_task is None or self._stream_task.done():
             self._stream_task = asyncio.create_task(self._stream_loop())
+
+        if self._use_system_audio and sd is not None:
+            try:
+                self._start_system_audio()
+            except Exception as exc:
+                logger.warning("System audio output failed: %s", exc)
+
         logger.info(
-            "AudioMixer initialized (sr=%s, ch=%s, chunk=%s)",
+            "AudioMixer initialized (sr=%s, ch=%s, chunk=%s, system_audio=%s)",
             self._sample_rate, self._channels, self._chunk_size,
+            self._sd_stream is not None,
         )
 
     async def shutdown(self) -> None:
         """믹서 종료."""
         self._shutdown = True
-        self._playback.is_playing = False
+        self._is_playing = False
+        self._stop_system_audio()
 
         if self._stream_task and not self._stream_task.done():
             self._stream_task.cancel()
@@ -118,8 +99,6 @@ class AudioMixer:
         self._stream_task = None
         self._subscribers.clear()
         self._audio = None
-        self._crossfade = None
-        self._fade = None
         logger.info("AudioMixer shutdown complete")
 
     # ── 트랙 로드/재생 ────────────────────────────────────────────
@@ -135,121 +114,33 @@ class AudioMixer:
         async with self._lock:
             self._audio = audio
             self._sample_pos = 0
-            self._crossfade = None
-            self._fade = None
-            self._chunk_gain = 1.0
-            self._playback.track_path = path
-            self._playback.duration_sec = len(audio) / self._sample_rate
-            self._playback.position_sec = 0.0
+            self._track_path = path
+            self._duration_sec = len(audio) / self._sample_rate
+            self._position_sec = 0.0
 
-        logger.info("Loaded track: %s (%.1fs)", path.name, self._playback.duration_sec)
-        return self._playback.duration_sec
+        logger.info("Loaded track: %s (%.1fs)", path.name, self._duration_sec)
+        return self._duration_sec
 
     async def play(self) -> None:
         """현재 로드된 트랙 재생 시작."""
         if self._audio is None:
             raise RuntimeError("No track loaded. Call load_track() first.")
-        self._playback.is_playing = True
+        self._is_playing = True
 
     async def pause(self) -> None:
         """재생 일시정지."""
-        self._playback.is_playing = False
+        self._is_playing = False
 
     async def stop(self) -> None:
         """재생 정지 및 위치 초기화."""
         async with self._lock:
-            self._playback.is_playing = False
+            self._is_playing = False
             self._sample_pos = 0
-            self._playback.position_sec = 0.0
-            self._crossfade = None
-            self._fade = None
-            self._chunk_gain = 1.0
-
-    # ── 트랜지션 ──────────────────────────────────────────────────
-
-    async def crossfade_to(self, next_track_path: Path, duration_sec: float = 3.0) -> None:
-        """현재 트랙에서 다음 트랙으로 크로스페이드."""
-        next_path = Path(next_track_path)
-        next_audio = await asyncio.to_thread(self._load_audio_file, next_path)
-        fade_samples = max(1, int(duration_sec * self._sample_rate))
-
-        async with self._lock:
-            if self._audio is None:
-                self._audio = next_audio
-                self._sample_pos = 0
-                self._playback.track_path = next_path
-                self._playback.duration_sec = len(next_audio) / self._sample_rate
-                self._playback.position_sec = 0.0
-                self._playback.is_playing = True
-                return
-
-            self._crossfade = _CrossfadeState(
-                next_audio=next_audio,
-                next_path=next_path,
-                total_samples=fade_samples,
-                remaining=fade_samples,
-            )
-            self._playback.is_playing = True
-
-    async def fade_out(self, duration_sec: float = 2.0) -> None:
-        """현재 트랙 페이드아웃."""
-        samples = max(1, int(duration_sec * self._sample_rate))
-        async with self._lock:
-            self._fade = _FadeState(
-                kind="out",
-                total_samples=samples,
-                remaining=samples,
-                start_gain=self._chunk_gain,
-                end_gain=0.0,
-            )
-
-    async def fade_in(self, duration_sec: float = 2.0) -> None:
-        """현재 트랙 페이드인."""
-        samples = max(1, int(duration_sec * self._sample_rate))
-        async with self._lock:
-            self._chunk_gain = 0.0
-            self._fade = _FadeState(
-                kind="in",
-                total_samples=samples,
-                remaining=samples,
-                start_gain=0.0,
-                end_gain=1.0,
-            )
-
-    # ── BPM 매칭 ──────────────────────────────────────────────────
-
-    async def match_bpm(self, target_bpm: int) -> None:
-        """현재 트랙 BPM을 target_bpm에 맞게 타임스트레칭."""
-        if librosa is None:
-            raise RuntimeError("librosa is required for match_bpm()")
-
-        async with self._lock:
-            if self._audio is None:
-                raise RuntimeError("No track loaded")
-
-            mono = self._audio.mean(axis=1)
-            tempo, _ = librosa.beat.beat_track(y=mono, sr=self._sample_rate)
-            current_bpm = float(tempo)
-            if current_bpm <= 0:
-                raise RuntimeError("Could not detect BPM")
-
-            rate = target_bpm / current_bpm
-            stretched_channels = []
-            for ch in range(self._audio.shape[1]):
-                stretched = librosa.effects.time_stretch(self._audio[:, ch], rate=rate)
-                stretched_channels.append(stretched)
-
-            min_len = min(len(c) for c in stretched_channels)
-            self._audio = np.stack([c[:min_len] for c in stretched_channels], axis=1)
-            self._sample_pos = min(self._sample_pos, len(self._audio))
-            self._playback.duration_sec = len(self._audio) / self._sample_rate
-            logger.info("BPM matched: %.1f -> %d", current_bpm, target_bpm)
-
-    # ── 볼륨/이펙트 ───────────────────────────────────────────────
+            self._position_sec = 0.0
 
     def set_volume(self, volume: float) -> None:
         """볼륨 설정 (0.0~1.0)."""
-        self._playback.volume = max(0.0, min(1.0, volume))
+        self._volume = max(0.0, min(1.0, volume))
 
     # ── WebSocket 스트리밍 ────────────────────────────────────────
 
@@ -263,130 +154,68 @@ class AudioMixer:
         self._subscribers.discard(ws)
 
     async def _stream_loop(self) -> None:
-        """청크 단위로 구독자에게 오디오 전송."""
+        """청크 단위로 오디오 전송."""
         chunk_duration = self._chunk_size / self._sample_rate
         try:
             while not self._shutdown:
-                if not self._playback.is_playing or self._audio is None:
+                if not self._is_playing or self._audio is None:
                     await asyncio.sleep(0.02)
                     continue
 
-                chunk = await self._next_chunk()
-                if chunk is None:
-                    self._playback.is_playing = False
+                chunk_data = await self._next_chunk()
+                if chunk_data is None:
+                    self._is_playing = False
                     await asyncio.sleep(0.02)
                     continue
 
-                await self._broadcast_chunk(chunk)
+                await self._broadcast_chunk(chunk_data)
                 await asyncio.sleep(chunk_duration)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("AudioMixer stream loop error")
 
-    async def _next_chunk(self) -> Optional[AudioChunk]:
+    async def _next_chunk(self) -> Optional[np.ndarray]:
         """재생 위치에서 다음 청크를 생성."""
         async with self._lock:
-            return self._build_chunk()
-
-    def _build_chunk(self) -> Optional[AudioChunk]:
-        """락 내부에서 호출 — 다음 청크를 계산한다."""
-        if self._audio is None:
-            return None
-
-        n = self._chunk_size
-        pos = self._sample_pos
-        end = min(pos + n, len(self._audio))
-
-        if pos >= len(self._audio) and self._crossfade is None:
-            return None
-
-        current = self._audio[pos:end] if pos < len(self._audio) else np.zeros((0, self._channels), dtype=np.float32)
-
-        # 크로스페이드 구간
-        if self._crossfade is not None:
-            cf = self._crossfade
-            take = min(n, cf.remaining, len(current) if len(current) else n)
-            if take <= 0:
-                self._finish_crossfade()
-                return self._build_chunk()
-
-            if len(current) < take:
-                pad = np.zeros((take - len(current), self._channels), dtype=np.float32)
-                current = np.vstack([current, pad]) if len(current) else pad
-
-            next_part = cf.next_audio[cf.next_pos:cf.next_pos + take]
-            if len(next_part) < take:
-                pad = np.zeros((take - len(next_part), self._channels), dtype=np.float32)
-                next_part = np.vstack([next_part, pad]) if len(next_part) else pad
-
-            progress = 1.0 - (cf.remaining / cf.total_samples)
-            alpha = np.linspace(progress, min(1.0, progress + take / cf.total_samples), take, dtype=np.float32)
-            alpha = alpha[:, np.newaxis]
-            mixed = current[:take] * (1.0 - alpha) + next_part[:take] * alpha
-
-            cf.remaining -= take
-            cf.next_pos += take
-            self._sample_pos += take
-
-            if cf.remaining <= 0:
-                self._finish_crossfade()
-
-            data = self._apply_effects(mixed)
-        else:
-            if len(current) == 0:
+            if self._audio is None:
                 return None
+
+            pos = self._sample_pos
+            end = min(pos + self._chunk_size, len(self._audio))
+
+            if pos >= len(self._audio):
+                return None
+
+            data = self._audio[pos:end].astype(np.float32, copy=True)
+            data *= self._volume
+            data = np.clip(data, -1.0, 1.0)
+
             self._sample_pos = end
-            data = self._apply_effects(current)
+            self._position_sec = end / self._sample_rate
+            return data
 
-        self._playback.position_sec = self._sample_pos / self._sample_rate
-        return AudioChunk(data=data, sample_rate=self._sample_rate, channels=self._channels)
+    async def _broadcast_chunk(self, data: np.ndarray) -> None:
+        """시스템 오디오 출력 + WebSocket 구독자에게 int16 PCM 전송."""
+        # 시스템 오디오 출력 (논블로킹 큐 push)
+        if self._sd_buffer is not None:
+            try:
+                self._sd_buffer.put_nowait(data.copy())
+            except queue.Full:
+                try:
+                    self._sd_buffer.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._sd_buffer.put_nowait(data.copy())
+                except queue.Full:
+                    pass
 
-    def _finish_crossfade(self) -> None:
-        """크로스페이드 완료 후 다음 트랙으로 전환."""
-        if self._crossfade is None:
-            return
-        cf = self._crossfade
-        self._audio = cf.next_audio
-        self._sample_pos = cf.next_pos
-        self._playback.track_path = cf.next_path
-        self._playback.duration_sec = len(self._audio) / self._sample_rate
-        self._crossfade = None
-        logger.info("Crossfade complete -> %s", cf.next_path.name)
-
-    def _apply_effects(self, data: np.ndarray) -> np.ndarray:
-        """페이드·볼륨·청크 게인 적용."""
-        out = data.astype(np.float32, copy=True)
-        n = len(out)
-
-        if self._fade is not None and n > 0:
-            fade = self._fade
-            apply_n = min(n, fade.remaining)
-            if apply_n > 0:
-                t = np.linspace(
-                    1.0 - fade.remaining / fade.total_samples,
-                    1.0 - (fade.remaining - apply_n) / fade.total_samples,
-                    apply_n,
-                    dtype=np.float32,
-                )
-                gain = fade.start_gain + (fade.end_gain - fade.start_gain) * t
-                out[:apply_n] *= gain[:, np.newaxis]
-                fade.remaining -= apply_n
-                if fade.remaining <= 0:
-                    self._chunk_gain = fade.end_gain
-                    if fade.kind == "out":
-                        self._playback.is_playing = False
-                    self._fade = None
-
-        out *= self._chunk_gain * self._playback.volume
-        return np.clip(out, -1.0, 1.0)
-
-    async def _broadcast_chunk(self, chunk: AudioChunk) -> None:
-        """모든 구독자에게 int16 PCM 전송."""
+        # WebSocket 구독자 전송
         if not self._subscribers:
             return
 
-        pcm = (chunk.data * 32767.0).astype(np.int16)
+        pcm = (data * 32767.0).astype(np.int16)
         payload = pcm.tobytes()
         dead: Set[WebSocket] = set()
 
@@ -398,6 +227,49 @@ class AudioMixer:
 
         for ws in dead:
             self._subscribers.discard(ws)
+
+    # ── 시스템 오디오 출력 ─────────────────────────────────────────
+
+    def _sd_callback(self, outdata, frames, time_info, status):
+        """sounddevice 콜백 — 별도 스레드에서 실행, 논블로킹."""
+        if self._sd_buffer is None:
+            outdata.fill(0)
+            return
+        try:
+            data = self._sd_buffer.get_nowait()
+            n = min(len(data), frames)
+            outdata[:n] = data[:n]
+            if n < frames:
+                outdata[n:] = 0
+        except queue.Empty:
+            outdata.fill(0)
+
+    def _start_system_audio(self) -> None:
+        """sounddevice OutputStream(callback)으로 시스템 스피커 출력 시작."""
+        if sd is None:
+            return
+        self._sd_buffer = queue.Queue(maxsize=30)
+        self._sd_stream = sd.OutputStream(
+            samplerate=self._sample_rate,
+            channels=self._channels,
+            dtype="float32",
+            blocksize=self._chunk_size,
+            callback=self._sd_callback,
+        )
+        self._sd_stream.start()
+        logger.info("System audio output started (sounddevice callback mode)")
+
+    def _stop_system_audio(self) -> None:
+        """시스템 오디오 출력 중지."""
+        if self._sd_stream is not None:
+            try:
+                self._sd_stream.stop()
+                self._sd_stream.close()
+            except Exception:
+                pass
+            self._sd_stream = None
+            self._sd_buffer = None
+            logger.info("System audio output stopped")
 
     # ── 파일 로드 (동기) ──────────────────────────────────────────
 
@@ -440,22 +312,13 @@ class AudioMixer:
         if ch == 1 and self._channels == 2:
             return np.repeat(data, 2, axis=1)
         if ch > self._channels:
-            return data[:, : self._channels]
-        # 2 -> 1 등: 평균
+            return data[:, :self._channels]
         return data.mean(axis=1, keepdims=True)
 
     def _resample(self, data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+        """리샘플링 (선형 보간)."""
         if orig_sr == target_sr:
             return data
-        if librosa is not None:
-            resampled = [
-                librosa.resample(data[:, c], orig_sr=orig_sr, target_sr=target_sr)
-                for c in range(data.shape[1])
-            ]
-            min_len = min(len(c) for c in resampled)
-            return np.stack([c[:min_len] for c in resampled], axis=1).astype(np.float32)
-
-        # librosa 없을 때 선형 보간 폴백
         ratio = target_sr / orig_sr
         new_len = int(len(data) * ratio)
         x_old = np.linspace(0, 1, len(data), dtype=np.float32)
@@ -470,10 +333,10 @@ class AudioMixer:
     def get_playback_state(self) -> dict:
         """현재 재생 상태 반환."""
         return {
-            "track": str(self._playback.track_path) if self._playback.track_path else None,
-            "position": self._playback.position_sec,
-            "duration": self._playback.duration_sec,
-            "volume": self._playback.volume,
-            "is_playing": self._playback.is_playing,
+            "track": str(self._track_path) if self._track_path else None,
+            "position": self._position_sec,
+            "duration": self._duration_sec,
+            "volume": self._volume,
+            "is_playing": self._is_playing,
             "subscribers": len(self._subscribers),
         }

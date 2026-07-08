@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Music Stream Player</title>
+<style>
+  body { margin: 0; background: transparent; }
+  #status { color: white; font-family: monospace; font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="status">Connecting...</div>
+<script>
+// PCM WebSocket 스트림 → Web Audio API 재생
+// 포맷: int16 stereo interleaved, 44100Hz, chunk_size=4096 samples
+
+const WS_URL = 'ws://localhost:8005/music/stream';
+const SAMPLE_RATE = 44100;
+const CHANNELS = 2;
+const BUFFER_SIZE = 4096;
+
+let audioCtx = null;
+let ws = null;
+let scriptNode = null;
+let bufferQueue = [];
+let receivedChunks = 0;
+let playedChunks = 0;
+const MAX_QUEUE = 30;
+const statusEl = document.getElementById('status');
+
+function log(msg) {
+  console.log('[MusicStream] ' + msg);
+  if (statusEl) statusEl.textContent = msg;
+}
+
+function startAudio() {
+  if (audioCtx && audioCtx.state !== 'closed') {
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().then(() => log('AudioContext resumed'));
+    }
+    return;
+  }
+
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: SAMPLE_RATE,
+      latencyHint: 'interactive'
+    });
+  } catch(e) {
+    log('AudioContext error: ' + e.message);
+    return;
+  }
+
+  // Force resume if suspended
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+
+  // ScriptProcessorNode로 PCM 데이터를 출력
+  scriptNode = audioCtx.createScriptProcessor(BUFFER_SIZE, 0, CHANNELS);
+  scriptNode.onaudioprocess = function(e) {
+    const outL = e.outputBuffer.getChannelData(0);
+    const outR = e.outputBuffer.getChannelData(1);
+
+    if (bufferQueue.length > 0) {
+      const chunk = bufferQueue.shift();
+      const samples = chunk.length / CHANNELS;
+      for (let i = 0; i < BUFFER_SIZE; i++) {
+        if (i < samples) {
+          outL[i] = chunk[i * CHANNELS] / 32768.0;
+          outR[i] = chunk[i * CHANNELS + 1] / 32768.0;
+        } else {
+          outL[i] = 0;
+          outR[i] = 0;
+        }
+      }
+      playedChunks++;
+    } else {
+      for (let i = 0; i < BUFFER_SIZE; i++) {
+        outL[i] = 0;
+        outR[i] = 0;
+      }
+    }
+  };
+
+  // Connect through a gain node to ensure audio routing
+  const gainNode = audioCtx.createGain();
+  gainNode.gain.value = 1.0;
+  scriptNode.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+
+  log('AudioContext started, state=' + audioCtx.state + ', sr=' + audioCtx.sampleRate);
+
+  // Periodically check and resume if needed
+  setInterval(() => {
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+      log('AudioContext re-resumed');
+    }
+  }, 1000);
+}
+
+function connectWS() {
+  if (ws && ws.readyState <= 1) return;
+
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = function() {
+    log('WebSocket connected');
+    startAudio();
+  };
+
+  ws.onmessage = function(evt) {
+    if (!(evt.data instanceof ArrayBuffer)) return;
+    const int16 = new Int16Array(evt.data);
+    receivedChunks++;
+
+    // 큐가 너무 크면 오래된 것 버림 (지연 방지)
+    while (bufferQueue.length >= MAX_QUEUE) {
+      bufferQueue.shift();
+    }
+    bufferQueue.push(int16);
+
+    if (receivedChunks % 50 === 0) {
+      log('recv=' + receivedChunks + ' play=' + playedChunks + ' q=' + bufferQueue.length +
+          ' ctx=' + (audioCtx ? audioCtx.state : 'null'));
+    }
+  };
+
+  ws.onclose = function() {
+    log('WebSocket closed, reconnecting in 2s...');
+    setTimeout(connectWS, 2000);
+  };
+
+  ws.onerror = function(err) {
+    log('WebSocket error');
+    try { ws.close(); } catch(e) {}
+  };
+}
+
+// 페이지 로드 시 바로 연결
+connectWS();
+</script>
+</body>
+</html>
