@@ -39,11 +39,13 @@ RADIO_INTERVAL_MIN = int(os.environ.get("RADIO_INTERVAL_MIN", "20"))      # 라�
 RADIO_INTERVAL_MAX = int(os.environ.get("RADIO_INTERVAL_MAX", "60"))      # 라디오 멘트 최대 간격 (초)
 
 # ── YouTube Music 채팅 명령 ─────────────────────────────────────
-MUSIC_PLAY_PREFIXES = ("!play ", "!음악 ", "!노래 ")
+MUSIC_PLAY_PREFIXES = ("!play ", "!음악 ", "!노래 ", "!신청 ")
 MUSIC_SKIP_COMMANDS = frozenset({"!skip", "!스킵", "!다음", "!next"})
 MUSIC_STOP_COMMANDS = frozenset({"!stop", "!정지", "!음악정지"})
 MUSIC_PAUSE_COMMANDS = frozenset({"!pause", "!일시정지"})
 MUSIC_RESUME_COMMANDS = frozenset({"!resume", "!재개"})
+MUSIC_NOWPLAYING_COMMANDS = frozenset({"!현재곡", "!nowplaying", "!np", "!뭐틀어"})
+MUSIC_QUEUE_COMMANDS = frozenset({"!대기열", "!queue", "!큐"})
 
 RADIO_PROMPTS = [
     "현재 재생 중인 곡에 대해 이야기해주세요",
@@ -637,19 +639,67 @@ class BroadcastChatManager:
             | MUSIC_STOP_COMMANDS
             | MUSIC_PAUSE_COMMANDS
             | MUSIC_RESUME_COMMANDS
+            | MUSIC_NOWPLAYING_COMMANDS
+            | MUSIC_QUEUE_COMMANDS
         )
         return text_lower in all_cmds
 
+    async def _announce_music(self, text: str, emotion: str = "happy") -> None:
+        """신청곡 관련 시온 반응을 TTS + Live2D로 출력."""
+        audio_base64: Optional[str] = None
+        if self._voice_enabled:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self._voice_url}/voice/tts",
+                        json={"text": text, "emotion": emotion},
+                        timeout=aiohttp.ClientTimeout(total=30.0),
+                    ) as resp:
+                        if resp.status == 200:
+                            audio_bytes = await resp.read()
+                            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+            except Exception as e:
+                logger.warning("[MusicCmd] TTS 실패 (무시): %s", e)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{self._live2d_url}/live2d/emotion",
+                    json={"emotion": emotion},
+                    timeout=aiohttp.ClientTimeout(total=3.0),
+                )
+                broadcast_payload: dict = {
+                    "cmd": "speak",
+                    "text": text,
+                    "emotion": emotion,
+                    "author": "시온",
+                    "platform": "music",
+                    "is_donation": False,
+                }
+                if audio_base64:
+                    broadcast_payload["audio_base64"] = audio_base64
+                await session.post(
+                    f"{self._live2d_url}/live2d/broadcast",
+                    json=broadcast_payload,
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                )
+        except Exception as e:
+            logger.warning("[MusicCmd] Live2D 전송 실패 (무시): %s", e)
+
     async def _handle_music_command(self, msg: ChatMessage) -> None:
-        """채팅 명령으로 YouTube Music 제어."""
+        """채팅 명령으로 YouTube Music 제어 + 시온 반응."""
         text = msg.message.strip()
         text_lower = text.lower()
 
+        # ── 신청곡 재생 ──────────────────────────────────────────
         for prefix in MUSIC_PLAY_PREFIXES:
             if text_lower.startswith(prefix.lower()):
                 query = text[len(prefix):].strip()
                 if not query:
-                    logger.info("[MusicCmd] 재생 명령에 검색어 없음: %s", msg.author)
+                    await self._announce_music(
+                        f"{msg.author}님, 듣고 싶은 곡 이름을 같이 적어주세요!",
+                        "confused",
+                    )
                     return
                 try:
                     async with aiohttp.ClientSession() as session:
@@ -660,12 +710,28 @@ class BroadcastChatManager:
                         ) as resp:
                             if resp.status == 200:
                                 data = await resp.json()
-                                track = (data.get("track") or {})
+                                track = data.get("track") or {}
+                                title = track.get("title", query)
+                                artist = track.get("artist", "")
+                                now_playing = data.get("now_playing")
+                                # 큐에 추가된 건지 바로 재생인지 구분
+                                if now_playing and now_playing.get("track", {}).get("video_id") != track.get("video_id"):
+                                    announce = (
+                                        f"{msg.author}님이 신청하신 {title}"
+                                        f"{' - ' + artist if artist else ''}, "
+                                        f"대기열에 추가했어요! 곧 틀어드릴게요~"
+                                    )
+                                else:
+                                    announce = (
+                                        f"{msg.author}님 신청곡! "
+                                        f"{title}"
+                                        f"{' - ' + artist if artist else ''} "
+                                        f"바로 틀어드릴게요~"
+                                    )
+                                await self._announce_music(announce, "excited")
                                 logger.info(
                                     "[MusicCmd] 재생: %s — %s (by %s)",
-                                    track.get("artist", "?"),
-                                    track.get("title", query),
-                                    msg.author,
+                                    artist or "?", title, msg.author,
                                 )
                             else:
                                 body = await resp.text()
@@ -673,19 +739,89 @@ class BroadcastChatManager:
                                     "[MusicCmd] 재생 실패 HTTP %s: %s",
                                     resp.status, body[:200],
                                 )
+                                await self._announce_music(
+                                    f"앗, {query} 검색에 실패했어요... 다시 한번 시도해주세요!",
+                                    "sad",
+                                )
                 except Exception as exc:
                     logger.warning("[MusicCmd] ai_music 연결 실패: %s", exc)
+                    await self._announce_music(
+                        "음악 서버에 연결할 수 없어요... 잠시 후 다시 시도해주세요!",
+                        "sad",
+                    )
                 return
 
+        # ── 현재곡 정보 ──────────────────────────────────────────
+        if text_lower in MUSIC_NOWPLAYING_COMMANDS:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{self._music_url}/ymusic/now-playing",
+                        timeout=aiohttp.ClientTimeout(total=10.0),
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            np = data.get("now_playing")
+                            if np and np.get("track"):
+                                t = np["track"]
+                                title = t.get("title", "알 수 없는 곡")
+                                artist = t.get("artist", "")
+                                requester = t.get("requester", "")
+                                announce = f"지금 듣고 있는 곡은 {title}"
+                                if artist:
+                                    announce += f" - {artist}"
+                                if requester:
+                                    announce += f"! {requester}님이 신청해주셨어요~"
+                                else:
+                                    announce += "!"
+                                await self._announce_music(announce, "happy")
+                            else:
+                                await self._announce_music(
+                                    "지금은 재생 중인 곡이 없어요! !노래 로 신청해주세요~",
+                                    "calm",
+                                )
+            except Exception as exc:
+                logger.warning("[MusicCmd] now-playing 조회 실패: %s", exc)
+            return
+
+        # ── 대기열 정보 ──────────────────────────────────────────
+        if text_lower in MUSIC_QUEUE_COMMANDS:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{self._music_url}/ymusic/now-playing",
+                        timeout=aiohttp.ClientTimeout(total=10.0),
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            queue_list = data.get("queue") or []
+                            if queue_list:
+                                names = [q.get("title", "?") for q in queue_list[:5]]
+                                announce = f"대기열에 {len(queue_list)}곡이 있어요! " + ", ".join(names)
+                                if len(queue_list) > 5:
+                                    announce += f" 외 {len(queue_list) - 5}곡"
+                            else:
+                                announce = "대기열이 비어있어요~ !노래 로 신청해주세요!"
+                            await self._announce_music(announce, "calm")
+            except Exception as exc:
+                logger.warning("[MusicCmd] queue 조회 실패: %s", exc)
+            return
+
+        # ── 스킵/정지/일시정지/재개 ──────────────────────────────
         endpoint = None
+        announce_text = None
         if text_lower in MUSIC_SKIP_COMMANDS:
             endpoint = "/ymusic/skip"
+            announce_text = f"{msg.author}님 요청으로 다음 곡으로 넘길게요!"
         elif text_lower in MUSIC_STOP_COMMANDS:
             endpoint = "/ymusic/stop"
+            announce_text = "음악 재생을 멈출게요~"
         elif text_lower in MUSIC_PAUSE_COMMANDS:
             endpoint = "/ymusic/pause"
+            announce_text = "잠깐 일시정지할게요!"
         elif text_lower in MUSIC_RESUME_COMMANDS:
             endpoint = "/ymusic/resume"
+            announce_text = "다시 재생할게요!"
 
         if not endpoint:
             return
@@ -696,14 +832,16 @@ class BroadcastChatManager:
                     f"{self._music_url}{endpoint}",
                     timeout=aiohttp.ClientTimeout(total=30.0),
                 ) as resp:
-                    if resp.status != 200:
+                    if resp.status == 200:
+                        logger.info("[MusicCmd] %s by %s", endpoint, msg.author)
+                        if announce_text:
+                            await self._announce_music(announce_text, "happy")
+                    else:
                         body = await resp.text()
                         logger.warning(
                             "[MusicCmd] %s 실패 HTTP %s: %s",
                             endpoint, resp.status, body[:200],
                         )
-                    else:
-                        logger.info("[MusicCmd] %s by %s", endpoint, msg.author)
         except Exception as exc:
             logger.warning("[MusicCmd] ai_music 연결 실패: %s", exc)
 
