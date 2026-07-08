@@ -62,6 +62,7 @@ class AudioMixer:
         # 시스템 오디오 출력 (sounddevice callback 방식)
         self._sd_stream: Optional[object] = None
         self._sd_buffer: Optional[queue.Queue] = None
+        self._sd_prefill: int = 5  # 재생 전 프리필 청크 수
         self._use_system_audio = os.environ.get("MUSIC_SYSTEM_AUDIO", "1") == "1"
 
     # ── 라이프사이클 ──────────────────────────────────────────────
@@ -156,11 +157,21 @@ class AudioMixer:
     async def _stream_loop(self) -> None:
         """청크 단위로 오디오 전송."""
         chunk_duration = self._chunk_size / self._sample_rate
+        # 약간 짧게 sleep해서 버퍼가 빌 틈을 줄인다
+        sleep_duration = chunk_duration * 0.85
         try:
             while not self._shutdown:
                 if not self._is_playing or self._audio is None:
                     await asyncio.sleep(0.02)
                     continue
+
+                # 시스템 오디오 버퍼 프리필: 재생 시작 시 몇 청크를 미리 채운다
+                if self._sd_buffer is not None and self._sd_buffer.empty():
+                    for _ in range(self._sd_prefill):
+                        prefill = await self._next_chunk()
+                        if prefill is None:
+                            break
+                        await self._broadcast_chunk(prefill)
 
                 chunk_data = await self._next_chunk()
                 if chunk_data is None:
@@ -169,7 +180,7 @@ class AudioMixer:
                     continue
 
                 await self._broadcast_chunk(chunk_data)
-                await asyncio.sleep(chunk_duration)
+                await asyncio.sleep(sleep_duration)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -248,7 +259,7 @@ class AudioMixer:
         """sounddevice OutputStream(callback)으로 시스템 스피커 출력 시작."""
         if sd is None:
             return
-        self._sd_buffer = queue.Queue(maxsize=30)
+        self._sd_buffer = queue.Queue(maxsize=50)
         self._sd_stream = sd.OutputStream(
             samplerate=self._sample_rate,
             channels=self._channels,
