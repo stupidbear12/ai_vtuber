@@ -49,6 +49,9 @@ ACE-Step-1.5/
 # music 모듈 생성 캐시
 modules/music/output/
 
+# YouTube Music 다운로드 캐시
+cache/youtube_music/
+
 # 임시 테스트 파일
 test_*.mp3
 test_*.wav
