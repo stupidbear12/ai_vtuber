@@ -70,6 +70,16 @@ class GPTSoVITSEngine:
         config["ref_audio_path"] = str(ref_audio_path.resolve())
         return config
 
+    def reload_config(self) -> dict:
+        """설정 파일을 다시 읽어 레퍼런스 오디오 등을 갱신한다."""
+        old_ref = self._config.get("ref_audio_path")
+        self._config = self._load_config()
+        new_ref = self._config.get("ref_audio_path")
+        changed = old_ref != new_ref
+        if changed:
+            logger.info(f"레퍼런스 오디오 변경: {Path(old_ref).name} → {Path(new_ref).name}")
+        return {"changed": changed, "ref_audio": new_ref}
+
     # ── 모델 가중치 보장 ─────────────────────────────────────────
 
     async def _ensure_weights(self) -> None:

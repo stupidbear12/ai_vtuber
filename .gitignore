@@ -88,3 +88,13 @@ modules/broadcast/app/chzzk_tokens.json
 # Claude/Cursor 설정
 .claude/
 .cursorignore
+
+# Zeroth/voice dataset (large)
+/data/
+
+# Voice test output
+modules/voice/data/test_output/
+
+# Training deploy scripts
+modules/training/auto_deploy*.ps1
+modules/training/*.err
