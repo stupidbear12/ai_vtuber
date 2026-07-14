@@ -124,6 +124,15 @@ async def music_status():
     }
 
 
+@app.post("/music/volume")
+async def set_volume(volume: float):
+    """볼륨 설정 (0.0~2.0). 1.0 초과 시 증폭."""
+    if mixer is None:
+        raise HTTPException(status_code=503, detail="Mixer not initialized")
+    mixer.set_volume(volume)
+    return {"success": True, "volume": volume}
+
+
 # ── YouTube Music ─────────────────────────────────────────────────
 
 def _require_ymusic() -> YouTubeMusicPlayer:

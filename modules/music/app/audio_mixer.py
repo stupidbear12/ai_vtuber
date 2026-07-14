@@ -140,8 +140,8 @@ class AudioMixer:
             self._position_sec = 0.0
 
     def set_volume(self, volume: float) -> None:
-        """볼륨 설정 (0.0~1.0)."""
-        self._volume = max(0.0, min(1.0, volume))
+        """볼륨 설정 (0.0~2.0). 1.0 초과 시 증폭."""
+        self._volume = max(0.0, min(2.0, volume))
 
     # ── WebSocket 스트리밍 ────────────────────────────────────────
 
