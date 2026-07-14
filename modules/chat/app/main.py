@@ -132,6 +132,7 @@ class ChatResponse(BaseModel):
     """채팅 응답 모델."""
     reply: str
     emotion: str
+    action: Optional[dict] = None  # {"type": "play_music", "query": "..."}
     error: Optional[str] = None
 
 

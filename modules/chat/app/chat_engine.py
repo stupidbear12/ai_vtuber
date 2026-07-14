@@ -38,6 +38,9 @@ _EMOTION_TAG_RE = re.compile(r"\[(?:감정:)?(\w+)\]")
 # 앞부분의 모든 감정 태그를 제거하는 정규식 (이중 출력 대응)
 _EMOTION_STRIP_RE = re.compile(r"^(\s*\[(?:감정:)?\w+\]\s*)+")
 
+# 액션 태그 파싱 정규식 — [액션:play_music:검색어] 형식
+_ACTION_PLAY_MUSIC_RE = re.compile(r"\[액션:play_music:([^\]]+)\]")
+
 
 # 지원하는 감정 태그 목록 (Live2D 표정과 매핑됨)
 VALID_EMOTIONS = {
@@ -60,13 +63,21 @@ _BROADCAST_SYSTEM_PROMPT = """\
 응답 맨 앞에 반드시 [감정:태그] 붙여. Live2D 표정 애니메이션에 사용돼.
 태그: happy, sad, surprised, thinking, excited, calm, worried, angry, love, shy
 
+[액션 태그 규칙]
+시청자가 음악/노래를 틀어달라고 요청하면, 응답에 [액션:play_music:검색어] 태그를 추가해.
+검색어는 시청자가 원하는 곡/장르/분위기를 YouTube Music 검색어로 변환해서 넣어.
+예시: "발라드 추천해줘" → [액션:play_music:한국 발라드 추천] 발라드 한 곡 틀어줄게~
+예시: "신나는 노래 좀" → [액션:play_music:신나는 K-pop 댄스] 신나는 거 바로 틀어줄게!
+곡을 틀었다는 말은 해도 돼 (실제로 재생 액션이 실행되니까).
+음악 요청이 아닌 일반 채팅에는 액션 태그를 붙이지 마.
+
 [방송 채팅 응답 규칙]
 - 반드시 1문장으로 답해. 최대 40자. 절대 2문장 이상 쓰지 마
 - 시청자 닉네임을 자연스럽게 불러 (채팅 끝에 닉네임 정보가 있어)
 - 후원/도네이션이면 감사 인사 꼭 해줘
 - 채팅 맥락을 반영해서 자연스럽게 반응해
 - 모르는 건 절대 지어내지 마. 없었던 일을 있었던 것처럼 말하지 마
-- 곡을 틀었다, 큐에 넣었다 등 실제로 하지 않은 행동을 말하지 마
+- 음악을 틀어달라는 요청이 아닌 이상, 곡을 틀었다·큐에 넣었다 등 실제로 하지 않은 행동을 말하지 마
 - 시청자의 질문에 모르면 "잘 모르겠는데?" 라고 솔직하게 답해
 """
 
@@ -162,8 +173,10 @@ async def generate_reply(
 
     Returns:
         {
-            "reply":   응답 텍스트 (감정 태그 제거됨),
+            "reply":   응답 텍스트 (감정/액션 태그 제거됨),
             "emotion": 감정 태그 (기본값: "calm"),
+            "action":  액션 태그 파싱 결과 (없으면 키 자체가 없음),
+                       예: {"type": "play_music", "query": "..."}
             "error":   오류 메시지 (오류 발생 시만 포함)
         }
     """
@@ -223,6 +236,15 @@ async def generate_reply(
     if emotion not in VALID_EMOTIONS:
         emotion = "calm"
 
+    # [액션:play_music:검색어] 파싱 — 텍스트 어디에 있든 추출 후 제거
+    action = None
+    action_m = _ACTION_PLAY_MUSIC_RE.search(text)
+    if action_m:
+        query = action_m.group(1).strip()
+        if query:
+            action = {"type": "play_music", "query": query}
+        text = (text[:action_m.start()] + text[action_m.end():]).strip()
+
     # RAG: 오류 없이 성공한 대화만 기억에 저장 (응답을 블로킹하지 않음)
     if not error_msg and _is_rag_enabled():
         try:
@@ -235,6 +257,8 @@ async def generate_reply(
             logger.warning(f"[ChatEngine] 대화 저장 태스크 생성 실패: {e}")
 
     result = {"reply": text, "emotion": emotion}
+    if action:
+        result["action"] = action
     if error_msg:
         result["error"] = error_msg
 

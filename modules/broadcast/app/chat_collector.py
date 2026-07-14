@@ -845,6 +845,42 @@ class BroadcastChatManager:
         except Exception as exc:
             logger.warning("[MusicCmd] ai_music 연결 실패: %s", exc)
 
+    async def _handle_music_action(self, query: str, requester: str) -> None:
+        """LLM이 감지한 자연어 음악 요청([액션:play_music:검색어])을 처리.
+
+        기존 !노래 명령과 달리 LLM 응답 자체가 "틀어줄게~" 등으로 이미
+        반응하므로, 여기서는 재생 요청만 보내고 별도 TTS 안내는 하지 않는다.
+
+        Args:
+            query: LLM이 생성한 YouTube Music 검색어
+            requester: 요청한 시청자 닉네임
+        """
+        if not self._music_commands_enabled or not query.strip():
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._music_url}/ymusic/play",
+                    json={"query": query, "requester": requester},
+                    timeout=aiohttp.ClientTimeout(total=120.0),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        track = data.get("track") or {}
+                        logger.info(
+                            "[MusicAction] 재생: %s — %s (query=%r, by %s)",
+                            track.get("artist", "?"), track.get("title", query),
+                            query, requester,
+                        )
+                    else:
+                        body = await resp.text()
+                        logger.warning(
+                            "[MusicAction] 재생 실패 HTTP %s (query=%r): %s",
+                            resp.status, query, body[:200],
+                        )
+        except Exception as exc:
+            logger.warning("[MusicAction] ai_music 연결 실패 (query=%r): %s", query, exc)
+
     def _enqueue(self, msg: ChatMessage) -> None:
         """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
 
@@ -949,6 +985,7 @@ class BroadcastChatManager:
 
         reply_text = (data.get("reply") or "").strip()
         emotion = data.get("emotion", "calm")
+        action = data.get("action")
         if not reply_text:
             raise RuntimeError("ai_chat 응답이 비어 있습니다")
 
@@ -956,6 +993,10 @@ class BroadcastChatManager:
             f"[ChatManager] [{msg.platform}] {msg.author}: "
             f"{msg.message[:30]} → [{emotion}] {reply_text[:50]}"
         )
+
+        # 자연어 음악 요청 감지 시 재생 (LLM 응답에 [액션:play_music:...] 태그 포함)
+        if action and action.get("type") == "play_music" and action.get("query"):
+            asyncio.create_task(self._handle_music_action(action["query"], msg.author))
 
         # ── Step 2.5: Chzzk 채팅창 전송 (기본 비활성) ─────────────
         if (
@@ -1113,9 +1154,14 @@ class BroadcastChatManager:
 
                 reply_text = (data.get("reply") or "").strip()
                 emotion = data.get("emotion", "calm")
+                action = data.get("action")
                 if not reply_text:
                     logger.warning("[RadioMode] ai_chat 응답이 비어 있음")
                     continue
+
+                # 라디오 멘트 중 자연어 음악 요청 감지 시 재생
+                if action and action.get("type") == "play_music" and action.get("query"):
+                    asyncio.create_task(self._handle_music_action(action["query"], "시온"))
 
                 # 라디오용 ChatMessage 생성 → _respond_to_chat 파이프라인 재사용
                 radio_msg = ChatMessage(
