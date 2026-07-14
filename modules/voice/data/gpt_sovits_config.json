@@ -1,7 +1,7 @@
 {
-  "ref_audio": "sion_v3_ref.wav",
-  "prompt_text": "stay happy with a little heart flatten",
-  "prompt_lang": "en",
-  "gpt_weights_path": "C:\\Users\\thtgg\\workspace2\\GPT-SoVITS\\GPT_weights_v2\\sion_jfla_v3-e20.ckpt",
-  "sovits_weights_path": "C:\\Users\\thtgg\\workspace2\\GPT-SoVITS\\SoVITS_weights_v2\\sion_jfla_v3_e20.pth"
+  "ref_audio": "195_KimEunA_004.flac",
+  "prompt_text": "",
+  "prompt_lang": "ko",
+  "gpt_weights_path": "C:\\Users\\thtgg\\workspace2\\GPT-SoVITS\\GPT_SoVITS\\pretrained_models\\gsv-v2final-pretrained\\s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
+  "sovits_weights_path": "C:\\Users\\thtgg\\workspace2\\GPT-SoVITS\\GPT_SoVITS\\pretrained_models\\gsv-v2final-pretrained\\s2G2333k.pth"
 }

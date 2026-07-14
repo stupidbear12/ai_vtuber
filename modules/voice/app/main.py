@@ -144,5 +144,13 @@ async def voice_status():
     return engine.get_status()
 
 
+@app.post("/voice/reload")
+async def voice_reload():
+    """설정 파일을 다시 읽어 레퍼런스 오디오 등을 런타임에 갱신한다."""
+    engine = get_engine()
+    result = engine.reload_config()
+    return result
+
+
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8004, reload=True)
