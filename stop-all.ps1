@@ -4,7 +4,7 @@
 $Root = $PSScriptRoot
 $RunDir = Join-Path $Root ".run"
 $pidsFile = Join-Path $RunDir "pids.json"
-$ports = @(8000, 8001, 8002, 8003, 8004, 8005)
+$ports = @(8000, 8001, 8002, 8003, 8004, 8005, 8007)
 
 function Stop-ProcessTree {
     param([int]$ProcessId)

@@ -47,6 +47,15 @@ MUSIC_RESUME_COMMANDS = frozenset({"!resume", "!재개"})
 MUSIC_NOWPLAYING_COMMANDS = frozenset({"!현재곡", "!nowplaying", "!np", "!뭐틀어"})
 MUSIC_QUEUE_COMMANDS = frozenset({"!대기열", "!queue", "!큐"})
 
+# ── Auto-DJ 설정 ──────────────────────────────────────────────
+AUTO_DJ_ENABLED = os.environ.get("AUTO_DJ_ENABLED", "1") == "1"
+AUTO_DJ_IDLE_SEC = int(os.environ.get("AUTO_DJ_IDLE_SEC", "180"))       # 음악 없을 시 자동 선곡 대기 (초, 기본 3분)
+AUTO_DJ_CHECK_INTERVAL = int(os.environ.get("AUTO_DJ_CHECK_INTERVAL", "30"))  # 음악 상태 체크 간격 (초)
+
+# ── 브라우저 에이전트 채팅 명령 ──────────────────────────────────
+BROWSER_PREFIXES = ("!브라우저 ", "!browser ", "!검색 ")
+BROWSER_STOP_COMMANDS = frozenset({"!브라우저중지", "!브라우저정지", "!browser stop"})
+
 RADIO_PROMPTS = [
     "현재 재생 중인 곡에 대해 이야기해주세요",
     "시청자들에게 인사하고 채팅을 유도해주세요",
@@ -553,6 +562,9 @@ class BroadcastChatManager:
         self._live2d_url = os.environ.get("AI_LIVE2D_URL", live2d_url).rstrip("/")
         self._voice_url = os.environ.get("AI_VOICE_URL", voice_url).rstrip("/")
         self._music_url = os.environ.get("AI_MUSIC_URL", music_url).rstrip("/")
+        self._browser_agent_url = os.environ.get(
+            "AI_BROWSER_AGENT_URL", "http://localhost:8007"
+        ).rstrip("/")
         self._music_commands_enabled = os.environ.get(
             "BROADCAST_MUSIC_COMMANDS", "1"
         ).lower() in ("true", "1", "yes")
@@ -848,8 +860,8 @@ class BroadcastChatManager:
     async def _handle_music_action(self, query: str, requester: str) -> None:
         """LLM이 감지한 자연어 음악 요청([액션:play_music:검색어])을 처리.
 
-        기존 !노래 명령과 달리 LLM 응답 자체가 "틀어줄게~" 등으로 이미
-        반응하므로, 여기서는 재생 요청만 보내고 별도 TTS 안내는 하지 않는다.
+        재생 성공 시 신청곡 정보를 TTS로 안내한다.
+        Auto-DJ 타이머도 리셋한다.
 
         Args:
             query: LLM이 생성한 YouTube Music 검색어
@@ -857,6 +869,9 @@ class BroadcastChatManager:
         """
         if not self._music_commands_enabled or not query.strip():
             return
+        # Auto-DJ 타이머 리셋
+        if hasattr(self, '_last_music_time'):
+            self._last_music_time = time.time()
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -867,11 +882,17 @@ class BroadcastChatManager:
                     if resp.status == 200:
                         data = await resp.json()
                         track = data.get("track") or {}
+                        title = track.get("title", query)
+                        artist = track.get("artist", "")
                         logger.info(
                             "[MusicAction] 재생: %s — %s (query=%r, by %s)",
-                            track.get("artist", "?"), track.get("title", query),
-                            query, requester,
+                            artist or "?", title, query, requester,
                         )
+                        # 신청곡 TTS 안내
+                        announce = f"{requester}님이 신청하신 {title}"
+                        if artist:
+                            announce += f" - {artist}"
+                        await self._announce_music(announce, "excited")
                     else:
                         body = await resp.text()
                         logger.warning(
@@ -880,6 +901,91 @@ class BroadcastChatManager:
                         )
         except Exception as exc:
             logger.warning("[MusicAction] ai_music 연결 실패 (query=%r): %s", query, exc)
+
+    # ── 브라우저 에이전트 명령 ─────────────────────────────────────
+
+    def _is_browser_command(self, msg: ChatMessage) -> bool:
+        """브라우저 에이전트 채팅 명령 여부."""
+        text = msg.message.strip().lower()
+        for prefix in BROWSER_PREFIXES:
+            if text.startswith(prefix.lower()):
+                return True
+        return text in BROWSER_STOP_COMMANDS
+
+    async def _handle_browser_command(self, msg: ChatMessage) -> None:
+        """브라우저 에이전트 명령 처리."""
+        text = msg.message.strip()
+        text_lower = text.lower()
+
+        # 중지 명령
+        if text_lower in BROWSER_STOP_COMMANDS:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self._browser_agent_url}/browser/stop",
+                        timeout=aiohttp.ClientTimeout(total=10.0),
+                    ) as resp:
+                        if resp.status == 200:
+                            await self._announce_music("브라우저 종료할게요!", "calm")
+            except Exception as e:
+                logger.warning("[BrowserCmd] 브라우저 중지 실패: %s", e)
+            return
+
+        # 명령 실행
+        command = ""
+        for prefix in BROWSER_PREFIXES:
+            if text_lower.startswith(prefix.lower()):
+                command = text[len(prefix):].strip()
+                break
+
+        if not command:
+            return
+
+        # 브라우저 시작 (아직 안 켜져있으면)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._browser_agent_url}/browser/start",
+                    timeout=aiohttp.ClientTimeout(total=30.0),
+                ) as resp:
+                    pass  # 이미 실행 중이어도 OK
+        except Exception as e:
+            logger.warning("[BrowserCmd] 브라우저 시작 실패: %s", e)
+            await self._announce_music("브라우저를 시작할 수 없어요...", "worried")
+            return
+
+        # 명령 전송 (비동기 — 결과를 기다리지 않음)
+        asyncio.create_task(
+            self._run_browser_command(command, msg.author)
+        )
+
+    async def _run_browser_command(self, command: str, requester: str) -> None:
+        """브라우저 에이전트 명령을 비동기로 실행한다."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._browser_agent_url}/browser/command",
+                    json={"command": command, "requester": requester},
+                    timeout=aiohttp.ClientTimeout(total=300.0),  # 최대 5분
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        logger.info(
+                            "[BrowserCmd] 완료: %d스텝, %s",
+                            data.get("steps", 0),
+                            data.get("final_comment", "")[:50],
+                        )
+                    else:
+                        body = await resp.text()
+                        logger.warning(
+                            "[BrowserCmd] 실패 HTTP %s: %s",
+                            resp.status, body[:200],
+                        )
+                        await self._announce_music(
+                            "브라우저 명령 실행에 실패했어요...", "worried"
+                        )
+        except Exception as e:
+            logger.warning("[BrowserCmd] 연결 실패: %s", e)
 
     def _enqueue(self, msg: ChatMessage) -> None:
         """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
@@ -903,6 +1009,12 @@ class BroadcastChatManager:
             if self._loop is not None:
                 self._loop.create_task(self._handle_music_command(msg))
             return
+
+        # 브라우저 제어는 API 직접 호출로만 가능 (시청자 채팅 비활성화)
+        # if self._is_browser_command(msg):
+        #     if self._loop is not None:
+        #         self._loop.create_task(self._handle_browser_command(msg))
+        #     return
 
         if self._filter.should_respond(msg):
             logger.info(f"[ChatManager] 응답 대상: {msg.author}: {msg.message[:30]}")
@@ -1268,6 +1380,148 @@ class BroadcastChatManager:
                     break
         logger.info("[RadioMode] 워커 안전 종료")
 
+    # ── Auto-DJ ──────────────────────────────────────────────────
+
+    async def _auto_dj_loop(self) -> None:
+        """Auto-DJ 루프 — 음악이 없으면 시온의 대화 맥락으로 자동 선곡.
+
+        동작 흐름:
+          1. AUTO_DJ_CHECK_INTERVAL마다 음악 모듈 상태 체크
+          2. 음악이 재생 중이면 _last_music_time 갱신
+          3. AUTO_DJ_IDLE_SEC 동안 음악이 없으면 LLM에 선곡 요청
+          4. 추천곡을 자동 재생 + TTS 안내
+        """
+        self._last_music_time = time.time()
+        logger.info("[AutoDJ] 루프 시작 (idle=%ds, check=%ds)",
+                    AUTO_DJ_IDLE_SEC, AUTO_DJ_CHECK_INTERVAL)
+
+        while self._running:
+            try:
+                await asyncio.sleep(AUTO_DJ_CHECK_INTERVAL)
+            except asyncio.CancelledError:
+                break
+
+            if not self._running:
+                break
+
+            # 음악 상태 체크
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{self._music_url}/health",
+                        timeout=aiohttp.ClientTimeout(total=5.0),
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+            except Exception:
+                continue
+
+            now_playing = data.get("now_playing")
+            queue_size = data.get("queue_size", 0)
+
+            if now_playing or queue_size > 0:
+                self._last_music_time = time.time()
+                continue
+
+            # 음악 없는 시간 체크
+            idle_sec = time.time() - self._last_music_time
+            if idle_sec < AUTO_DJ_IDLE_SEC:
+                continue
+
+            # ── LLM에 선곡 요청 ──────────────────────────────
+            logger.info("[AutoDJ] 음악 idle %.0fs → 자동 선곡 요청", idle_sec)
+
+            try:
+                time_period = self._get_time_period()
+                dj_prompt = (
+                    f"[Auto-DJ] 지금 방송에서 음악이 안 나오고 있어요. "
+                    f"현재 시간대: {time_period}. "
+                    f"지금 분위기에 어울리는 한국어 노래 하나만 추천해주세요. "
+                    f"'아티스트 - 제목' 형식으로 노래 이름만 답해주세요. "
+                    f"다른 말은 하지 마세요."
+                )
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self._chat_url}/chat",
+                        json={
+                            "message": dj_prompt,
+                            "mode": "broadcast",
+                            "context": f"[Auto-DJ] {time_period} 시간대. 분위기에 맞는 노래 추천 요청.",
+                            "viewer_name": "시온",
+                            "is_donation": False,
+                        },
+                        timeout=aiohttp.ClientTimeout(total=60.0),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.warning("[AutoDJ] ai_chat 오류: HTTP %s", resp.status)
+                            self._last_music_time = time.time()
+                            continue
+                        chat_data = await resp.json()
+
+                reply = (chat_data.get("reply") or "").strip()
+                if not reply:
+                    logger.warning("[AutoDJ] LLM 응답 비어있음")
+                    self._last_music_time = time.time()
+                    continue
+
+                # LLM 응답에서 노래 검색어 추출 (감정 태그 등 제거)
+                import re
+                search_query = re.sub(r"\[감정:[^\]]*\]", "", reply).strip()
+                search_query = search_query.strip('"\'').strip()
+
+                if not search_query or len(search_query) < 2:
+                    logger.warning("[AutoDJ] 유효한 검색어 없음: %r", reply)
+                    self._last_music_time = time.time()
+                    continue
+
+                logger.info("[AutoDJ] 선곡: %s", search_query)
+
+                # 음악 재생
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self._music_url}/ymusic/play",
+                        json={"query": search_query, "requester": "시온 Auto-DJ"},
+                        timeout=aiohttp.ClientTimeout(total=120.0),
+                    ) as resp:
+                        if resp.status == 200:
+                            play_data = await resp.json()
+                            track = play_data.get("track") or {}
+                            title = track.get("title", search_query)
+                            artist = track.get("artist", "")
+                            song_info = f"{title} - {artist}" if artist else title
+                            announce = f"이 노래 한번 들어볼까요? {song_info}"
+                            await self._announce_music(announce, "happy")
+                            logger.info("[AutoDJ] 재생 성공: %s", song_info)
+                        else:
+                            body = await resp.text()
+                            logger.warning("[AutoDJ] 재생 실패 HTTP %s: %s",
+                                           resp.status, body[:200])
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("[AutoDJ] 오류: %s", e, exc_info=True)
+            finally:
+                self._last_music_time = time.time()
+
+    async def _auto_dj_safe(self) -> None:
+        """Auto-DJ 래퍼 — crash 시 자동 재시작."""
+        while self._running:
+            try:
+                await self._auto_dj_loop()
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("[AutoDJ] crash 감지 → 5초 후 재시작: %s", e, exc_info=True)
+                try:
+                    await asyncio.sleep(5.0)
+                except asyncio.CancelledError:
+                    break
+        logger.info("[AutoDJ] 루프 종료")
+
     async def start(self, platform: str, channel_id: str) -> None:
         """채팅 수집을 시작한다.
 
@@ -1317,6 +1571,12 @@ class BroadcastChatManager:
         self._worker_task = asyncio.create_task(self._response_worker())
         self._radio_task = asyncio.create_task(self._radio_worker_safe())
 
+        # Auto-DJ 태스크 시작
+        self._auto_dj_task: Optional[asyncio.Task] = None
+        if AUTO_DJ_ENABLED and self._music_commands_enabled:
+            self._auto_dj_task = asyncio.create_task(self._auto_dj_safe())
+            logger.info("[ChatManager] Auto-DJ 활성화")
+
         logger.info(
             f"[ChatManager] 방송 채팅 수집 시작: "
             f"platform={platform}, channel_id={channel_id}"
@@ -1334,7 +1594,7 @@ class BroadcastChatManager:
             self._collector.stop()
 
         # 수집/워커/라디오 태스크 취소 및 정리 (최대 3초 대기)
-        for task in (self._collect_task, self._worker_task, self._radio_task):
+        for task in (self._collect_task, self._worker_task, self._radio_task, getattr(self, '_auto_dj_task', None)):
             if task and not task.done():
                 task.cancel()
                 try:

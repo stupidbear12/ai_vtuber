@@ -25,7 +25,7 @@ let scriptNode = null;
 let bufferQueue = [];
 let receivedChunks = 0;
 let playedChunks = 0;
-const MAX_QUEUE = 30;
+const MAX_QUEUE = 10;  // 큐 축소: 실시간 전송이므로 큰 버퍼 불필요
 const statusEl = document.getElementById('status');
 
 function log(msg) {

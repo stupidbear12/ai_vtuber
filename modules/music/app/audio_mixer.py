@@ -155,10 +155,9 @@ class AudioMixer:
         self._subscribers.discard(ws)
 
     async def _stream_loop(self) -> None:
-        """청크 단위로 오디오 전송."""
+        """청크 단위로 오디오 전송 (클럭 기반 정확한 타이밍)."""
         chunk_duration = self._chunk_size / self._sample_rate
-        # 약간 짧게 sleep해서 버퍼가 빌 틈을 줄인다
-        sleep_duration = chunk_duration * 0.85
+        loop = asyncio.get_event_loop()
         try:
             while not self._shutdown:
                 if not self._is_playing or self._audio is None:
@@ -173,6 +172,8 @@ class AudioMixer:
                             break
                         await self._broadcast_chunk(prefill)
 
+                t_start = loop.time()
+
                 chunk_data = await self._next_chunk()
                 if chunk_data is None:
                     self._is_playing = False
@@ -180,7 +181,11 @@ class AudioMixer:
                     continue
 
                 await self._broadcast_chunk(chunk_data)
-                await asyncio.sleep(sleep_duration)
+
+                # 클럭 기반 sleep: 처리 시간을 빼서 정확히 실시간 속도로 전송
+                elapsed = loop.time() - t_start
+                sleep_time = max(0.001, chunk_duration - elapsed)
+                await asyncio.sleep(sleep_time)
         except asyncio.CancelledError:
             raise
         except Exception:

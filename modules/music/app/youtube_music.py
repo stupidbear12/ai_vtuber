@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 _VIDEO_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 
+# 최대 트랙 길이 (초) — 이 값을 초과하는 영상은 재생/큐 거부
+MAX_TRACK_DURATION_SEC = float(os.environ.get("YTMUSIC_MAX_DURATION", "900"))  # 기본 15분
+
 
 @dataclass
 class YTMTrack:
@@ -127,12 +130,22 @@ class YouTubeMusicPlayer:
                 )
                 results = [self._from_ytm_result(item) for item in raw]
                 results = [r for r in results if r.get("video_id")]
+                # 최대 길이 초과 트랙 필터링
+                results = [
+                    r for r in results
+                    if not r.get("duration_sec") or r["duration_sec"] <= MAX_TRACK_DURATION_SEC
+                ]
                 if results:
                     return results
             except Exception as exc:
                 logger.warning("ytmusicapi search failed, fallback to yt-dlp: %s", exc)
 
-        return await asyncio.to_thread(self._search_ytdlp, query, limit)
+        raw_results = await asyncio.to_thread(self._search_ytdlp, query, limit)
+        # 최대 길이 초과 트랙 필터링
+        return [
+            r for r in raw_results
+            if not r.get("duration_sec") or r["duration_sec"] <= MAX_TRACK_DURATION_SEC
+        ]
 
     async def resolve_video(self, video_id: str) -> YTMTrack:
         video_id = video_id.strip()
@@ -170,6 +183,12 @@ class YouTubeMusicPlayer:
         duration_sec: Optional[float] = None,
         requester: Optional[str] = None,
     ) -> YTMTrack:
+        # 최대 길이 초과 시 거부
+        if duration_sec and duration_sec > MAX_TRACK_DURATION_SEC:
+            mins = int(MAX_TRACK_DURATION_SEC // 60)
+            raise ValueError(
+                f"트랙이 너무 길어요 ({int(duration_sec//60)}분). 최대 {mins}분까지 가능합니다: {title}"
+            )
         async with self._lock:
             state = self._mixer.get_playback_state()
             if self._now_playing and state.get("is_playing"):
