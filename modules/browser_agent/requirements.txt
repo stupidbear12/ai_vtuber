@@ -1,0 +1,17 @@
+# ai_browser_agent 모듈 의존성
+# pip install -r modules/browser_agent/requirements.txt
+
+# === 서버 ===
+fastapi>=0.104
+uvicorn[standard]>=0.24
+pydantic>=2.0
+
+# === HTTP 클라이언트 ===
+aiohttp>=3.9
+
+# === 브라우저 제어 (Playwright) ===
+playwright>=1.40
+# 설치 후: playwright install chromium
+
+# === 환경변수 ===
+python-dotenv>=1.0

@@ -41,12 +41,58 @@ _EMOTION_STRIP_RE = re.compile(r"^(\s*\[(?:감정:)?\w+\]\s*)+")
 # 액션 태그 파싱 정규식 — [액션:play_music:검색어] 형식
 _ACTION_PLAY_MUSIC_RE = re.compile(r"\[액션:play_music:([^\]]+)\]")
 
+# 캐릭터 이름 접두사 제거 (모델이 "시온:", "sion:" 등을 붙이는 경우)
+_CHAR_PREFIX_RE = re.compile(r"^(?:시온|sion)\s*[:：]\s*", re.IGNORECASE)
+
+# 대괄호 메타 태그 제거 ([시온], [반말], [캐릭터 설정] 등)
+_META_TAG_RE = re.compile(r"\[(?:시온|sion|반말|캐릭터\s*설정|설정|system|user|assistant)[^\]]*\]", re.IGNORECASE)
+
+# 감정 키워드 → 태그 매핑 (모델이 [감정:태그]를 출력하지 않을 때 텍스트에서 추론)
+_EMOTION_KEYWORDS: dict[str, list[str]] = {
+    "happy": ["ㅎㅎ", "흐흐", "하하", "ㅋㅋ", "좋아", "좋다", "신나", "재밌"],
+    "sad": ["ㅠㅠ", "ㅜㅜ", "슬프", "슬퍼", "아쉽", "속상"],
+    "surprised": ["헐", "대박", "오오", "우와", "어머", "진짜?", "마?"],
+    "excited": ["완전", "불탄다", "미쳤", "쩔어", "레전드"],
+    "worried": ["괜찮", "걱정", "힘들", "위로", "무리하"],
+    "angry": ["화나", "짜증", "싫어", "열받"],
+    "love": ["좋아해", "사랑", "최고야", "❤", "♥"],
+    "shy": ["쑥스", "부끄", "에이~", "칭찬"],
+    "thinking": ["모르겠", "글쎄", "음~", "생각"],
+}
+
 
 # 지원하는 감정 태그 목록 (Live2D 표정과 매핑됨)
 VALID_EMOTIONS = {
     "happy", "sad", "surprised", "thinking", "excited",
     "calm", "worried", "angry", "love", "shy"
 }
+
+
+def _infer_emotion(text: str) -> str:
+    """텍스트 키워드로 감정을 추론한다. 매칭 안 되면 'calm' 반환."""
+    for emo, keywords in _EMOTION_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return emo
+    return "calm"
+
+
+def _clean_response(text: str) -> str:
+    """LLM 응답에서 불필요한 포맷/메타 정보를 정리한다."""
+    # 1) 구조화된 블록 제거 (모델이 { | } 같은 구조 출력 시)
+    #    첫 줄만 남기고 나머지 구조 제거
+    if "\n{" in text or "\n|" in text:
+        text = text.split("\n{")[0].split("\n|")[0].strip()
+    # 2) 캐릭터 이름 접두사 제거
+    text = _CHAR_PREFIX_RE.sub("", text)
+    # 3) 메타 태그 제거
+    text = _META_TAG_RE.sub("", text)
+    # 4) 괄호 안 지문/나레이션 제거 — (시온이 ~하다), (*웃으며*) 등
+    text = re.sub(r"\((?:시온|sion)[^)]*\)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\(\*[^)]*\*\)", "", text)
+    # 5) 연속 공백 정리
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text
 
 # ── 방송 채팅 모드 시스템 프롬프트 (캐릭터 카드 V2 스펙 기반) ──────
 _BROADCAST_SYSTEM_PROMPT = """\
@@ -237,20 +283,33 @@ async def generate_reply(
         else:
             text = "Ollama에 연결할 수 없어. ollama serve가 켜져 있는지 확인해줘!"
 
-    # [감정:태그] 파싱 — 텍스트 앞부분에서 태그 추출 후 제거
-    # 이중 출력 시 마지막 태그 사용
+    # [감정:태그] 파싱 — 텍스트 전체에서 태그 추출 후 제거
+    # 1) 앞부분 태그에서 감정 추출 (이중 출력 시 마지막 태그 사용)
     emotion = "calm"
+    emotion_found = False
     strip_m = _EMOTION_STRIP_RE.match(text)
     if strip_m:
         matched_prefix = strip_m.group(0)
         all_tags = _EMOTION_TAG_RE.findall(matched_prefix)
         if all_tags:
             emotion = all_tags[-1]  # 마지막 태그 사용
+            emotion_found = True
         text = text[strip_m.end():]
+    # 2) 텍스트 어디에든 남아 있는 감정 태그 모두 제거 (TTS가 읽지 않도록)
+    text = _EMOTION_TAG_RE.sub("", text).strip()
 
     # 유효하지 않은 감정 태그는 calm으로 폴백
     if emotion not in VALID_EMOTIONS:
         emotion = "calm"
+        emotion_found = False
+
+    # 응답 정리 (캐릭터 이름 접두사, 메타 태그, 구조화 블록 제거)
+    text = _clean_response(text)
+
+    # 감정 태그가 없었으면 텍스트에서 감정 추론
+    if not emotion_found:
+        emotion = _infer_emotion(text)
+        logger.info(f"[ChatEngine] 감정 태그 없음 → 키워드 추론: {emotion}")
 
     # [액션:play_music:검색어] 파싱 — 텍스트 어디에 있든 추출 후 제거
     action = None
