@@ -286,6 +286,11 @@ function updateUI(state) {
   indTop.className = 'indicator' + (!state.is_sion_turn ? ' active' : '');
   indBottom.className = 'indicator' + (state.is_sion_turn ? ' active' : '');
 
+  // 결과 오버레이 초기화 (새 게임 시 숨김)
+  if (state.phase !== 'game_over') {
+    resultOverlay.classList.remove('show');
+  }
+
   // 페이즈 표시
   switch (state.phase) {
     case 'sion_turn':
