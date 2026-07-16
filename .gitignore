@@ -94,3 +94,6 @@ modules/voice/data/test_output/
 # Training deploy scripts
 modules/training/auto_deploy*.ps1
 modules/training/*.err
+
+# Stockfish 바이너리 (대용량)
+modules/chess/stockfish/

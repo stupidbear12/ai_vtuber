@@ -1,4 +1,4 @@
-# start-all.ps1 — ai_vtuber local 6-module launcher
+﻿# start-all.ps1 — ai_vtuber local 6-module launcher
 # Usage: .\start-all.ps1  or  start-all.bat
 
 $ErrorActionPreference = "Stop"
@@ -78,7 +78,8 @@ $modules = @(
     @{ Name = "voice";     Port = 8004; Dir = "modules\voice" },
     @{ Name = "music";     Port = 8005; Dir = "modules\music" },
     @{ Name = "core";      Port = 8000; Dir = "modules\core" },
-    @{ Name = "browser_agent"; Port = 8007; Dir = "modules\browser_agent" }
+    @{ Name = "browser_agent"; Port = 8007; Dir = "modules\browser_agent" },
+    @{ Name = "chess";         Port = 8008; Dir = "modules\chess" }
 )
 
 $busy = @($modules | Where-Object { Test-PortInUse $_.Port })

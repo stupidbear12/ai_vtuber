@@ -47,6 +47,7 @@ BROWSER_AGENT = os.environ.get("AI_BROWSER_AGENT_URL", "http://localhost:8007")
 MUSIC_URL = os.environ.get("AI_MUSIC_URL", "http://localhost:8005")
 BROADCAST_URL = os.environ.get("AI_BROADCAST_URL", "http://localhost:8003")
 CORE_URL = os.environ.get("AI_CORE_URL", "http://localhost:8000")
+CHESS_URL = os.environ.get("AI_CHESS_URL", "http://localhost:8008")
 
 if not DISCORD_TOKEN:
     logger.error("DISCORD_BOT_TOKEN이 설정되지 않았습니다. .env를 확인하세요.")
@@ -235,6 +236,7 @@ async def cmd_status(interaction: discord.Interaction):
         "Broadcast(8003)": f"{BROADCAST_URL}/broadcast/status",
         "Music(8005)": f"{MUSIC_URL}/music/status",
         "Browser(8007)": f"{BROWSER_AGENT}/health",
+        "Chess(8008)": f"{CHESS_URL}/health",
     }
     lines = []
     s = await _get_session()
@@ -273,6 +275,62 @@ async def cmd_album_review(interaction: discord.Interaction, artist: str, album:
             "album": album,
         })
         await interaction.followup.send(f"📀 앨범 리뷰 시작: {artist} — {album}")
+    except Exception as e:
+        await interaction.followup.send(f"❌ 실패: {e}")
+
+
+# ── 슬래시 커맨드: 체스 ──────────────────────────────────────────
+
+@tree.command(name="chess-start", description="시청자 vs 시온 체스 대국을 시작합니다")
+@app_commands.describe(
+    skill="난이도 0~20 (기본 5)",
+    vote_time="투표 시간 초 (기본 30)",
+)
+@app_commands.check(admin_only)
+async def cmd_chess_start(
+    interaction: discord.Interaction,
+    skill: int = 5,
+    vote_time: int = 30,
+):
+    await interaction.response.defer()
+    try:
+        r = await _api_post(CHESS_URL, "/chess/new", {
+            "sion_color": "white",
+            "skill_level": skill,
+            "vote_duration": vote_time,
+        })
+        await interaction.followup.send(
+            f"♟️ 체스 대국 시작! 난이도 {skill}/20, 투표 {vote_time}초"
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ 실패: {e}")
+
+
+@tree.command(name="chess-stop", description="체스 대국을 중단합니다 (시온 기권)")
+@app_commands.check(admin_only)
+async def cmd_chess_stop(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        r = await _api_post(CHESS_URL, "/chess/resign", {"side": "sion"})
+        await interaction.followup.send("♟️ 체스 대국 종료 (시온 기권)")
+    except Exception as e:
+        await interaction.followup.send(f"❌ 실패: {e}")
+
+
+@tree.command(name="chess-status", description="체스 대국 상태를 확인합니다")
+@app_commands.check(admin_only)
+async def cmd_chess_status(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        r = await _api_get(CHESS_URL, "/chess/state")
+        phase = r.get("phase", "unknown")
+        move_count = r.get("move_count", 0)
+        msg = f"♟️ 상태: {phase}, {move_count}수 진행"
+        if r.get("is_check"):
+            msg += " (체크!)"
+        if r.get("result"):
+            msg += f" — 결과: {r['result']}"
+        await interaction.followup.send(msg)
     except Exception as e:
         await interaction.followup.send(f"❌ 실패: {e}")
 
