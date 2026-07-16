@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin:0; padding:0; }
+html, body { width:100%; height:100%; overflow:hidden; background:#000; }
+#player { position:absolute; top:0; left:0; width:100%; height:100%; }
+#idle { display:none; position:absolute; top:0; left:0; width:100%; height:100%;
+        justify-content:center; align-items:center; color:#333; font-size:24px;
+        font-family:'Segoe UI',sans-serif; background:#000; }
+</style>
+</head>
+<body>
+<div id="player"></div>
+<div id="idle">Waiting for video...</div>
+<script>
+// URL 파라미터에서 영상 ID 읽기: ?v=VIDEO_ID
+var params = new URLSearchParams(location.search);
+var videoId = params.get('v') || '';
+
+var tag = document.createElement('script');
+tag.src = "https://www.youtube.com/iframe_api";
+document.head.appendChild(tag);
+
+var player;
+
+function onYouTubeIframeAPIReady() {
+  if (!videoId) {
+    document.getElementById('idle').style.display = 'flex';
+    return;
+  }
+  createPlayer(videoId);
+}
+
+function createPlayer(vid) {
+  document.getElementById('idle').style.display = 'none';
+  if (player && player.destroy) {
+    try { player.destroy(); } catch(e) {}
+  }
+  document.getElementById('player').innerHTML = '';
+
+  player = new YT.Player('player', {
+    width: '100%',
+    height: '100%',
+    videoId: vid,
+    playerVars: {
+      autoplay: 1,
+      controls: 0,
+      disablekb: 1,
+      fs: 0,
+      iv_load_policy: 3,
+      modestbranding: 1,
+      rel: 0,
+      showinfo: 0,
+      mute: 0
+    },
+    events: {
+      onReady: function(e) { e.target.playVideo(); },
+      onError: function(e) {
+        console.log('YT Error:', e.data);
+        if (e.data === 150 || e.data === 101) {
+          player.mute();
+          player.playVideo();
+        }
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>

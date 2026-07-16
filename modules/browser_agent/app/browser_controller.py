@@ -13,7 +13,6 @@ import asyncio
 import base64
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger("browser_controller")
 logger.setLevel(logging.DEBUG)
@@ -54,6 +53,11 @@ class BrowserController:
             "--window-size=1280,720",
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--disable-software-rasterizer",
+            "--use-angle=swiftshader",
+            "--in-process-gpu",
         ]
         if win_x and win_y:
             chrome_args.append(f"--window-position={win_x},{win_y}")

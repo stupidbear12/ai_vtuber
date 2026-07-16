@@ -52,10 +52,6 @@ AUTO_DJ_ENABLED = os.environ.get("AUTO_DJ_ENABLED", "1") == "1"
 AUTO_DJ_IDLE_SEC = int(os.environ.get("AUTO_DJ_IDLE_SEC", "180"))       # 음악 없을 시 자동 선곡 대기 (초, 기본 3분)
 AUTO_DJ_CHECK_INTERVAL = int(os.environ.get("AUTO_DJ_CHECK_INTERVAL", "30"))  # 음악 상태 체크 간격 (초)
 
-# ── 브라우저 에이전트 채팅 명령 ──────────────────────────────────
-BROWSER_PREFIXES = ("!브라우저 ", "!browser ", "!검색 ")
-BROWSER_STOP_COMMANDS = frozenset({"!브라우저중지", "!브라우저정지", "!browser stop"})
-
 RADIO_PROMPTS = [
     "현재 재생 중인 곡에 대해 이야기해주세요",
     "시청자들에게 인사하고 채팅을 유도해주세요",
@@ -562,9 +558,6 @@ class BroadcastChatManager:
         self._live2d_url = os.environ.get("AI_LIVE2D_URL", live2d_url).rstrip("/")
         self._voice_url = os.environ.get("AI_VOICE_URL", voice_url).rstrip("/")
         self._music_url = os.environ.get("AI_MUSIC_URL", music_url).rstrip("/")
-        self._browser_agent_url = os.environ.get(
-            "AI_BROWSER_AGENT_URL", "http://localhost:8007"
-        ).rstrip("/")
         self._music_commands_enabled = os.environ.get(
             "BROADCAST_MUSIC_COMMANDS", "1"
         ).lower() in ("true", "1", "yes")
@@ -902,91 +895,6 @@ class BroadcastChatManager:
         except Exception as exc:
             logger.warning("[MusicAction] ai_music 연결 실패 (query=%r): %s", query, exc)
 
-    # ── 브라우저 에이전트 명령 ─────────────────────────────────────
-
-    def _is_browser_command(self, msg: ChatMessage) -> bool:
-        """브라우저 에이전트 채팅 명령 여부."""
-        text = msg.message.strip().lower()
-        for prefix in BROWSER_PREFIXES:
-            if text.startswith(prefix.lower()):
-                return True
-        return text in BROWSER_STOP_COMMANDS
-
-    async def _handle_browser_command(self, msg: ChatMessage) -> None:
-        """브라우저 에이전트 명령 처리."""
-        text = msg.message.strip()
-        text_lower = text.lower()
-
-        # 중지 명령
-        if text_lower in BROWSER_STOP_COMMANDS:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{self._browser_agent_url}/browser/stop",
-                        timeout=aiohttp.ClientTimeout(total=10.0),
-                    ) as resp:
-                        if resp.status == 200:
-                            await self._announce_music("브라우저 종료할게요!", "calm")
-            except Exception as e:
-                logger.warning("[BrowserCmd] 브라우저 중지 실패: %s", e)
-            return
-
-        # 명령 실행
-        command = ""
-        for prefix in BROWSER_PREFIXES:
-            if text_lower.startswith(prefix.lower()):
-                command = text[len(prefix):].strip()
-                break
-
-        if not command:
-            return
-
-        # 브라우저 시작 (아직 안 켜져있으면)
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self._browser_agent_url}/browser/start",
-                    timeout=aiohttp.ClientTimeout(total=30.0),
-                ) as resp:
-                    pass  # 이미 실행 중이어도 OK
-        except Exception as e:
-            logger.warning("[BrowserCmd] 브라우저 시작 실패: %s", e)
-            await self._announce_music("브라우저를 시작할 수 없어요...", "worried")
-            return
-
-        # 명령 전송 (비동기 — 결과를 기다리지 않음)
-        asyncio.create_task(
-            self._run_browser_command(command, msg.author)
-        )
-
-    async def _run_browser_command(self, command: str, requester: str) -> None:
-        """브라우저 에이전트 명령을 비동기로 실행한다."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self._browser_agent_url}/browser/command",
-                    json={"command": command, "requester": requester},
-                    timeout=aiohttp.ClientTimeout(total=300.0),  # 최대 5분
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        logger.info(
-                            "[BrowserCmd] 완료: %d스텝, %s",
-                            data.get("steps", 0),
-                            data.get("final_comment", "")[:50],
-                        )
-                    else:
-                        body = await resp.text()
-                        logger.warning(
-                            "[BrowserCmd] 실패 HTTP %s: %s",
-                            resp.status, body[:200],
-                        )
-                        await self._announce_music(
-                            "브라우저 명령 실행에 실패했어요...", "worried"
-                        )
-        except Exception as e:
-            logger.warning("[BrowserCmd] 연결 실패: %s", e)
-
     def _enqueue(self, msg: ChatMessage) -> None:
         """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
 
@@ -1009,12 +917,6 @@ class BroadcastChatManager:
             if self._loop is not None:
                 self._loop.create_task(self._handle_music_command(msg))
             return
-
-        # 브라우저 제어는 API 직접 호출로만 가능 (시청자 채팅 비활성화)
-        # if self._is_browser_command(msg):
-        #     if self._loop is not None:
-        #         self._loop.create_task(self._handle_browser_command(msg))
-        #     return
 
         if self._filter.should_respond(msg):
             logger.info(f"[ChatManager] 응답 대상: {msg.author}: {msg.message[:30]}")
