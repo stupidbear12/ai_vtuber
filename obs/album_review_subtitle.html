@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: transparent;
+  overflow: hidden;
+  width: 1920px;
+  height: 200px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 20px 60px;
+  font-family: 'Pretendard', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+}
+
+#subtitle-box {
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 12px;
+  padding: 14px 28px;
+  max-width: 1400px;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+#subtitle-box.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#subtitle-text {
+  color: #fff;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+}
+
+#track-info {
+  color: #b794f6;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  letter-spacing: 1px;
+}
+</style>
+</head>
+<body>
+<div id="subtitle-box">
+  <div id="track-info"></div>
+  <div id="subtitle-text"></div>
+</div>
+
+<script>
+const LIVE2D_URL = 'http://localhost:8001';
+const REVIEW_URL = 'http://localhost:8007';
+
+let hideTimer = null;
+
+async function pollSubtitle() {
+  try {
+    // 앨범 리뷰 상태 확인
+    const statusResp = await fetch(`${REVIEW_URL}/browser/album-review/status`);
+    const status = await statusResp.json();
+
+    if (status.status === 'reviewing' && status.album) {
+      const trackInfo = document.getElementById('track-info');
+      if (status.current_track > 0) {
+        trackInfo.textContent = `${status.album} — Track ${status.current_track}/${status.total_tracks}`;
+      } else {
+        trackInfo.textContent = status.album;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Live2D broadcast 이벤트 수신 (polling)
+let lastText = '';
+
+async function pollBroadcast() {
+  try {
+    const resp = await fetch(`${LIVE2D_URL}/live2d/last-broadcast`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.text && data.text !== lastText && data.platform === 'album_review') {
+        lastText = data.text;
+        showSubtitle(data.text);
+      }
+    }
+  } catch (e) {
+    // ignore — endpoint might not exist yet
+  }
+}
+
+function showSubtitle(text) {
+  const box = document.getElementById('subtitle-box');
+  const textEl = document.getElementById('subtitle-text');
+  textEl.textContent = text;
+  box.classList.add('visible');
+
+  clearTimeout(hideTimer);
+  // 텍스트 길이에 따라 표시 시간 조절
+  const duration = Math.max(5000, text.length * 120);
+  hideTimer = setTimeout(() => {
+    box.classList.remove('visible');
+  }, duration);
+}
+
+// 폴링 시작
+setInterval(pollSubtitle, 3000);
+setInterval(pollBroadcast, 2000);
+
+// 테스트: URL 파라미터로 텍스트 표시
+const params = new URLSearchParams(window.location.search);
+if (params.get('test')) {
+  showSubtitle(params.get('test'));
+}
+</script>
+</body>
+</html>

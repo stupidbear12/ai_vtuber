@@ -33,11 +33,12 @@
       -webkit-app-region: drag;
     }
     body.transparent #panel { display: none; }
-    body.chromakey { background: #00FF00 !important; }
+    html.chromakey, body.chromakey { background: #00FF00 !important; }
+    body.chromakey #panel { display: none; }
     body.chromakey #canvas-wrap { background: #00FF00 !important; }
+    body.chromakey #live2d-canvas { background: #00FF00 !important; }
     body.transparent #canvas-wrap { background: transparent !important; }
-    body.transparent #live2d-canvas { background: transparent !important; }
-    body.transparent #live2d-canvas { -webkit-app-region: no-drag; background: transparent; }
+    body.transparent #live2d-canvas { background: transparent !important; -webkit-app-region: no-drag; }
 
     /* 캔버스 영역 */
     #canvas-wrap {

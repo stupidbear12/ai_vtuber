@@ -78,44 +78,56 @@ function setModelStatus(ok, text) {
 
 // ── PixiJS 초기화 ────────────────────────────────────────────────
 async function initPixi() {
-  if (isTransparent || isChromakey) {
-    document.body.classList.add('transparent'); if (isChromakey) document.body.classList.add('chromakey');
+  if (isChromakey) {
+    document.body.classList.add('chromakey');
+    document.documentElement.classList.add('chromakey');
+  } else if (isTransparent) {
+    document.body.classList.add('transparent');
     document.documentElement.classList.add('transparent');
   }
 
   const wrap = document.getElementById('canvas-wrap');
   const canvas = document.getElementById('live2d-canvas');
 
-  // 투명 모드: WebGL 컨텍스트를 alpha:true로 미리 생성
-  // Pixi는 기존 컨텍스트를 재사용하므로 alpha 채널이 보장됨
-  if (isTransparent || isChromakey) {
-    canvas.getContext('webgl2', {
-      alpha:              true,
-      premultipliedAlpha: false,
-      antialias:          true,
-      preserveDrawingBuffer: false,
-    }) || canvas.getContext('webgl', {
-      alpha:              true,
-      premultipliedAlpha: false,
-      antialias:          true,
-    });
-  }
+  // OBS CEF에서는 DPR이 1이므로 해상도 보정 불필요
+  const dpr = (isTransparent || isChromakey) ? 1 : (window.devicePixelRatio || 1);
 
-  pixiApp = new PIXI.Application();
-  await pixiApp.init({
+  const pixiOpts = {
     canvas:          canvas,
     width:           wrap.clientWidth,
     height:          wrap.clientHeight,
-    background: isChromakey ? 0x00FF00 : (isTransparent ? 0x000000 : 0x1a1a2e),
-    backgroundAlpha: (isTransparent && !isChromakey) ? 0 : 1,
     antialias:       true,
-    autoDensity:     true,
-    resolution:      window.devicePixelRatio || 1,
-    preference:      'webgl',   // OBS CEF WebGPU 미지원 대비
-  });
+    autoDensity:     !(isTransparent || isChromakey),
+    resolution:      dpr,
+    preference:      'webgl',
+  };
 
   if (isTransparent || isChromakey) {
-    canvas.style.cssText += isChromakey ? ';background:#00FF00!important;' : ';background:transparent!important;';
+    pixiOpts.backgroundAlpha = isChromakey ? 1 : 0;
+    pixiOpts.background = isChromakey ? 0x00FF00 : 0x000000;
+    pixiOpts.clearBeforeRender = true;
+  } else {
+    pixiOpts.background = 0x1a1a2e;
+    pixiOpts.backgroundAlpha = 1;
+  }
+
+  pixiApp = new PIXI.Application();
+  await pixiApp.init(pixiOpts);
+
+  // ── OBS 크로마키: gl.clearColor 강제 오버라이드 ──────────────
+  // PixiJS v8 또는 Live2D SDK가 clearColor를 (1,1,1,1) 흰색으로 덮어씀.
+  // clearColor 호출 자체를 가로채서 항상 green으로 강제.
+  if (isChromakey) {
+    const gl = pixiApp.renderer.gl;
+    const origClearColor = gl.clearColor.bind(gl);
+    gl.clearColor = function(r, g, b, a) {
+      // 모든 clearColor 호출을 green으로 강제
+      origClearColor(0, 1, 0, 1);
+    };
+    console.log('[Live2D] Chromakey: clearColor overridden to green');
+    canvas.style.cssText += ';background:#00FF00!important;';
+  } else if (isTransparent) {
+    canvas.style.cssText += ';background:transparent!important;';
   }
 
   window.addEventListener('resize', () => {
@@ -127,7 +139,8 @@ async function initPixi() {
 // ── 모델 배치 ────────────────────────────────────────────────────
 function centerModel() {
   const { width: sw, height: sh } = pixiApp.screen;
-  const dpr = window.devicePixelRatio || 1;
+  // 투명 모드(OBS)에서는 DPR 보정 불필요 (resolution=1)
+  const dpr = (isTransparent || isChromakey) ? 1 : (window.devicePixelRatio || 1);
   const { originalWidth: mw, originalHeight: mh } = l2dModel.internalModel;
   const scale = Math.min(sw / mw, sh / mh) * 0.90;
 

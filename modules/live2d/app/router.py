@@ -220,7 +220,26 @@ async def broadcast_speak(req: BroadcastSpeakRequest):
         payload["audio_base64"] = req.audio_base64
 
     await ws_manager.broadcast(payload)
+
+    # 마지막 브로드캐스트 저장 (자막 오버레이용)
+    global _last_broadcast
+    _last_broadcast = {
+        "text": req.text,
+        "emotion": req.emotion,
+        "author": req.author,
+        "platform": req.platform,
+    }
+
     return {"ok": True, "clients": ws_manager.count}
+
+
+_last_broadcast: dict = {}
+
+
+@live2d_router.get("/last-broadcast")
+async def get_last_broadcast():
+    """마지막 브로드캐스트 내용을 반환한다 (자막 오버레이 폴링용)."""
+    return _last_broadcast
 
 
 # ── 정적 파일 마운트 ─────────────────────────────────────────────
