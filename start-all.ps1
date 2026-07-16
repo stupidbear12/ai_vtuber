@@ -133,6 +133,27 @@ foreach ($mod in $modules) {
 
 $pids | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $RunDir "pids.json") -Encoding UTF8
 
+# ── Discord 봇 (uvicorn이 아닌 python -m 실행) ─────────────────
+$discordToken = $env:DISCORD_BOT_TOKEN
+if ($discordToken -and $discordToken -ne "여기에_봇_토큰_입력") {
+    $discordDir = Join-Path $Root "modules\discord_bot"
+    $discordOut = Join-Path $Root "logs_discord_bot.txt"
+    $discordErr = Join-Path $Root "logs_discord_bot_err.txt"
+    Write-Host "  starting discord_bot" -ForegroundColor Gray
+    $discordProc = Start-Process `
+        -FilePath $python `
+        -ArgumentList ($pyArgsPrefix + @("-m", "app.main")) `
+        -WorkingDirectory $discordDir `
+        -RedirectStandardOutput $discordOut `
+        -RedirectStandardError $discordErr `
+        -PassThru `
+        -WindowStyle Hidden
+    $pids += [ordered]@{ name = "discord_bot"; port = 0; pid = $discordProc.Id; dir = "modules\discord_bot" }
+    $pids | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $RunDir "pids.json") -Encoding UTF8
+} else {
+    Write-Host "  [SKIP] discord_bot — DISCORD_BOT_TOKEN 미설정" -ForegroundColor DarkGray
+}
+
 Write-Host ""
 Write-Host "[HEALTH CHECK]" -ForegroundColor Cyan
 foreach ($mod in $modules) {
@@ -150,3 +171,4 @@ Write-Host "  Stop       stop-all.bat"
 Write-Host ""
 Write-Host "[NOTE] YouTube Music BGM: FFmpeg 필요, OBS는 ws://localhost:8005/music/stream 구독" -ForegroundColor DarkYellow
 Write-Host "[NOTE] AI DJ(ACE-Step) 사용 시: MUSIC_ENABLE_AI_DJ=1 + port 8006 API 서버" -ForegroundColor DarkYellow
+Write-Host "[NOTE] Discord 봇: DISCORD_BOT_TOKEN + DISCORD_ADMIN_ID 설정 필요" -ForegroundColor DarkYellow

@@ -32,8 +32,8 @@ old/data/*_complete.txt
 # VTube Studio 인증 토큰 (민감 정보)
 vts_token.json
 
-# 모델 출력 / 대용량 파일
-modules/chat/output/
+# 모듈 출력 / 대용량 파일
+modules/*/output/
 llama.cpp/
 merge_log.txt
 merge_err.txt
@@ -46,11 +46,8 @@ modules/chat/data/chroma_db/
 # ACE-Step 모델 디렉토리 (대용량 바이너리)
 ACE-Step-1.5/
 
-# music 모듈 생성 캐시
-modules/music/output/
-
-# YouTube Music 다운로드 캐시
-cache/youtube_music/
+# 캐시 디렉토리
+cache/
 
 # 임시 테스트 파일
 test_*.mp3
@@ -77,7 +74,6 @@ training/__pycache__/
 
 # modules/training — 대용량 데이터/모델 제외 (스크립트만 추적)
 modules/training/data/
-modules/training/output/
 modules/training/*.txt
 modules/training/*.log
 !modules/training/run_krew_train.bat

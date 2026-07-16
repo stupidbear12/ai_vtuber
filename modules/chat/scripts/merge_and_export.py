@@ -12,7 +12,6 @@ LoRA 어댑터 → 베이스 모델 병합 → GGUF 변환 준비
 """
 
 import logging
-import subprocess
 import sys
 from pathlib import Path
 
