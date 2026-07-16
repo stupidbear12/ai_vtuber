@@ -12,9 +12,15 @@ app/browser_controller.py — Playwright 브라우저 제어 (ACT 단계)
 import asyncio
 import base64
 import logging
+import os
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("browser_controller")
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
+    logger.addHandler(_h)
 
 
 class BrowserController:
@@ -31,21 +37,32 @@ class BrowserController:
         return self._running
 
     async def start(self) -> None:
-        """Playwright 브라우저를 실행한다 (headless=False, OBS 캡처용)."""
+        """Playwright 브라우저를 실행한다 (headless=False, OBS 캡처용).
+
+        BROWSER_WINDOW_X / BROWSER_WINDOW_Y 환경변수로 창 위치를 지정할 수 있다.
+        서브 모니터에 띄우려면 X를 해당 모니터의 오프셋으로 설정.
+        """
         if self._running:
             raise RuntimeError("브라우저가 이미 실행 중입니다.")
 
         from playwright.async_api import async_playwright
 
+        win_x = os.environ.get("BROWSER_WINDOW_X", "")
+        win_y = os.environ.get("BROWSER_WINDOW_Y", "")
+
+        chrome_args = [
+            "--window-size=1280,720",
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+        ]
+        if win_x and win_y:
+            chrome_args.append(f"--window-position={win_x},{win_y}")
+
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
             headless=False,
             channel="chrome",
-            args=[
-                "--window-size=1280,720",
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-            ],
+            args=chrome_args,
         )
         self._page = await self._browser.new_page(
             viewport={"width": 1280, "height": 720},
@@ -53,7 +70,8 @@ class BrowserController:
         # 초기 페이지
         await self._page.goto("https://www.google.com", wait_until="domcontentloaded")
         self._running = True
-        logger.info("[Browser] Playwright 브라우저 시작 완료 (1280x720)")
+        pos_info = f" pos=({win_x},{win_y})" if win_x else ""
+        logger.info("[Browser] Playwright 브라우저 시작 완료 (1280x720%s)", pos_info)
 
     async def stop(self) -> None:
         """브라우저를 종료한다."""
@@ -99,7 +117,10 @@ class BrowserController:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         logger.info("[Browser] navigate → %s", url)
-        await self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        except Exception as exc:
+            logger.warning("[Browser] navigate timeout/error: %s", exc)
         await asyncio.sleep(1.0)  # 페이지 렌더링 대기
 
     async def click(self, target: str) -> None:
@@ -195,6 +216,12 @@ class BrowserController:
         logger.info("[Browser] scroll %s", direction)
         await self._page.mouse.wheel(0, delta)
         await asyncio.sleep(0.5)
+
+    async def evaluate(self, expression: str):
+        """페이지에서 JavaScript를 실행한다."""
+        if not self._page:
+            raise RuntimeError("브라우저가 실행 중이 아닙니다.")
+        return await self._page.evaluate(expression)
 
     async def press_enter(self) -> None:
         """Enter 키를 누른다."""
