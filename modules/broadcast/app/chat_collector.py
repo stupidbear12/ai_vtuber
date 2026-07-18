@@ -39,6 +39,10 @@ RADIO_INTERVAL_MIN = int(os.environ.get("RADIO_INTERVAL_MIN", "20"))      # 라�
 RADIO_INTERVAL_MAX = int(os.environ.get("RADIO_INTERVAL_MAX", "60"))      # 라디오 멘트 최대 간격 (초)
 
 # ── YouTube Music 채팅 명령 ─────────────────────────────────────
+# ── 웹서핑 자연어 감지 ──────────────────────────────────────────
+SURF_KEYWORDS = ["검색", "찾아", "알아봐", "웹서핑", "서핑", "위키", "사이트", "홈페이지", "구글"]
+SURF_SUFFIXES = ["해줘", "해주세요", "해봐", "줘", "주세요", "하자", "해"]
+
 MUSIC_PLAY_PREFIXES = ("!play ", "!음악 ", "!노래 ", "!신청 ")
 MUSIC_SKIP_COMMANDS = frozenset({"!skip", "!스킵", "!다음", "!next"})
 MUSIC_STOP_COMMANDS = frozenset({"!stop", "!정지", "!음악정지"})
@@ -46,10 +50,6 @@ MUSIC_PAUSE_COMMANDS = frozenset({"!pause", "!일시정지"})
 MUSIC_RESUME_COMMANDS = frozenset({"!resume", "!재개"})
 MUSIC_NOWPLAYING_COMMANDS = frozenset({"!현재곡", "!nowplaying", "!np", "!뭐틀어"})
 MUSIC_QUEUE_COMMANDS = frozenset({"!대기열", "!queue", "!큐"})
-
-# ── 체스 명령어 ──────────────────────────────────────────────
-CHESS_MOVE_PREFIX = "!수 "
-CHESS_MOVE_PREFIX_EN = "!move "
 
 # ── Auto-DJ 설정 ──────────────────────────────────────────────
 AUTO_DJ_ENABLED = os.environ.get("AUTO_DJ_ENABLED", "1") == "1"
@@ -562,9 +562,6 @@ class BroadcastChatManager:
         self._live2d_url = os.environ.get("AI_LIVE2D_URL", live2d_url).rstrip("/")
         self._voice_url = os.environ.get("AI_VOICE_URL", voice_url).rstrip("/")
         self._music_url = os.environ.get("AI_MUSIC_URL", music_url).rstrip("/")
-        self._chess_url = os.environ.get(
-            "AI_CHESS_URL", "http://localhost:8008"
-        ).rstrip("/")
         self._music_commands_enabled = os.environ.get(
             "BROADCAST_MUSIC_COMMANDS", "1"
         ).lower() in ("true", "1", "yes")
@@ -636,6 +633,46 @@ class BroadcastChatManager:
         if msg.author in bot_nicknames:
             return True
         return False
+
+    # ── 웹서핑 명령 ────────────────────────────────────────────────
+
+    def _is_surf_command(self, msg: ChatMessage) -> bool:
+        """자연어 웹서핑 요청 감지."""
+        text = msg.message.strip()
+        has_keyword = any(kw in text for kw in SURF_KEYWORDS)
+        has_suffix = any(text.endswith(sf) for sf in SURF_SUFFIXES)
+        return has_keyword and has_suffix
+
+    async def _handle_surf_command(self, msg: ChatMessage) -> None:
+        """웹서핑 요청을 browser_agent로 전달."""
+        surf_url = os.environ.get("AI_BROWSER_AGENT_URL", "http://localhost:8007")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{surf_url}/browser/surf",
+                    json={
+                        "message": msg.message,
+                        "author": msg.author,
+                        "switch_scene": True,
+                    },
+                    timeout=aiohttp.ClientTimeout(total=60.0),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        logger.info(
+                            "[ChatManager] 웹서핑 완료: %s → %s",
+                            msg.message[:30],
+                            data.get("url", ""),
+                        )
+                    else:
+                        body = await resp.text()
+                        logger.warning(
+                            "[ChatManager] 웹서핑 실패: HTTP %d: %s",
+                            resp.status,
+                            body[:100],
+                        )
+        except Exception as exc:
+            logger.warning("[ChatManager] browser_agent 연결 실패: %s", exc)
 
     def _is_music_command(self, msg: ChatMessage) -> bool:
         """YouTube Music 채팅 명령 여부."""
@@ -902,47 +939,6 @@ class BroadcastChatManager:
         except Exception as exc:
             logger.warning("[MusicAction] ai_music 연결 실패 (query=%r): %s", query, exc)
 
-    # ── 체스 투표 명령 ─────────────────────────────────────────────
-
-    def _is_chess_command(self, msg: ChatMessage) -> bool:
-        """체스 투표 명령 여부."""
-        text = msg.message.strip().lower()
-        return text.startswith(CHESS_MOVE_PREFIX.lower()) or text.startswith(CHESS_MOVE_PREFIX_EN.lower())
-
-    async def _handle_chess_vote(self, msg: ChatMessage) -> None:
-        """체스 투표를 체스 모듈에 전달한다."""
-        text = msg.message.strip()
-        # 수 추출
-        for prefix in (CHESS_MOVE_PREFIX, CHESS_MOVE_PREFIX_EN):
-            if text.lower().startswith(prefix.lower()):
-                move_str = text[len(prefix):].strip()
-                break
-        else:
-            return
-
-        if not move_str:
-            return
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self._chess_url}/chess/vote",
-                    json={"user_id": msg.author, "move": move_str},
-                    timeout=aiohttp.ClientTimeout(total=5.0),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        logger.info(
-                            "[ChessVote] %s → %s (총 %d표)",
-                            msg.author, data.get("move_san", move_str),
-                            data.get("total_votes", 0),
-                        )
-                    else:
-                        body = await resp.text()
-                        logger.debug("[ChessVote] 실패: %s", body[:100])
-        except Exception as e:
-            logger.debug("[ChessVote] 연결 실패: %s", e)
-
     def _enqueue(self, msg: ChatMessage) -> None:
         """이벤트 루프 스레드에서 실행 — 버퍼 추가 및 큐 삽입.
 
@@ -961,14 +957,14 @@ class BroadcastChatManager:
         self._last_activity_time = time.time()  # 라디오 모드 idle 타이머 리셋
         logger.info(f"[ChatManager] 채팅 수신: {msg.author}: {msg.message[:40]}")
 
-        if self._is_chess_command(msg):
-            if self._loop is not None:
-                self._loop.create_task(self._handle_chess_vote(msg))
-            return
-
         if self._is_music_command(msg):
             if self._loop is not None:
                 self._loop.create_task(self._handle_music_command(msg))
+            return
+
+        if self._is_surf_command(msg):
+            if self._loop is not None:
+                self._loop.create_task(self._handle_surf_command(msg))
             return
 
         if self._filter.should_respond(msg):

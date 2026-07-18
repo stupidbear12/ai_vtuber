@@ -8,6 +8,7 @@ pydantic>=2.0
 
 # === HTTP 클라이언트 ===
 aiohttp>=3.9
+httpx>=0.25
 
 # === 브라우저 제어 (Playwright) ===
 playwright>=1.40
