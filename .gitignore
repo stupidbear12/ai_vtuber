@@ -42,6 +42,8 @@ merge_err.txt
 # 대용량 데이터셋 / 학습 데이터 (git-lfs 별도 관리)
 modules/chat/data/*.jsonl
 modules/chat/data/chroma_db/
+modules/chat/data/chromadb/
+chromadb_data/
 
 # ACE-Step 모델 디렉토리 (대용량 바이너리)
 ACE-Step-1.5/

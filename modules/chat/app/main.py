@@ -52,7 +52,7 @@ def _is_rag_available() -> bool:
     """RAG 기능 사용 가능 여부 확인.
 
     CHAT_DISABLE_RAG=1 이면 비활성화.
-    chromadb 패키지가 설치되어 있어야 활성화 (HTTP 클라이언트로 Docker ChromaDB에 연결).
+    chromadb 패키지가 설치되어 있어야 활성화 (PersistentClient로 로컬 파일에 저장).
     """
     if os.environ.get("CHAT_DISABLE_RAG", "").lower() in ("1", "true", "yes"):
         return False
@@ -192,6 +192,76 @@ async def memory_stats():
         return {"rag_enabled": False, "reason": "chromadb 또는 sentence-transformers 미설치"}
     except Exception as e:
         return {"rag_enabled": False, "error": str(e)}
+
+
+class MemoryStoreRequest(BaseModel):
+    """RAG 메모리 저장 요청 모델."""
+    content: str                          # 저장할 텍스트
+    source: Optional[str] = "crawl"       # 출처 식별자
+    metadata: Optional[dict] = None       # 추가 메타데이터
+
+
+class MemoryStoreResponse(BaseModel):
+    """RAG 메모리 저장 응답 모델."""
+    stored: bool
+    chunks: int = 0
+    error: Optional[str] = None
+
+
+@app.post("/chat/memory/store", response_model=MemoryStoreResponse)
+async def memory_store(req: MemoryStoreRequest):
+    """외부 모듈(broadcast 등)에서 크롤링/검색 결과를 RAG에 저장한다."""
+    if not _is_rag_available():
+        return MemoryStoreResponse(stored=False, error="RAG 비활성화 상태")
+
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="content가 비어있습니다.")
+
+    try:
+        from app.memory import get_memory_engine
+        engine = get_memory_engine()
+        chunks = await engine.store_crawl(
+            content=req.content,
+            source=req.source or "crawl",
+            metadata=req.metadata,
+        )
+        return MemoryStoreResponse(stored=True, chunks=chunks)
+    except Exception as e:
+        logger.warning(f"[MemoryStore] 저장 실패: {e}")
+        return MemoryStoreResponse(stored=False, error=str(e))
+
+
+@app.get("/chat/memory/search")
+async def memory_search(q: str = "", n_results: int = 5):
+    """RAG 지식 베이스에서 유사 문서를 검색한다.
+
+    Args:
+        q: 검색 쿼리 텍스트
+        n_results: 반환할 최대 결과 수 (기본: 5)
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q 파라미터가 비어있습니다.")
+
+    if not _is_rag_available():
+        return {"results": [], "error": "RAG 비활성화 상태"}
+
+    try:
+        from app.memory import get_memory_engine
+        engine = get_memory_engine()
+
+        # 지식 베이스(크롤링 포함)에서 검색
+        knowledge = engine.search_knowledge_sync(q, n_results=n_results)
+        # 대화 기억에서도 검색
+        memories = engine.search_memories_sync(q, n_results=n_results)
+
+        return {
+            "query": q,
+            "knowledge": knowledge,
+            "memories": memories,
+        }
+    except Exception as e:
+        logger.warning(f"[MemorySearch] 검색 실패: {e}")
+        return {"query": q, "knowledge": [], "memories": [], "error": str(e)}
 
 
 @app.post("/chat", response_model=ChatResponse)
