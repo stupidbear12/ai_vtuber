@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-app/memory.py — RAG 기반 대화 기억 시스템 (ChromaDB HTTP 클라이언트)
+app/memory.py — RAG 기반 대화 기억 시스템 (ChromaDB PersistentClient)
 
 기능:
-  - Docker로 분리된 ChromaDB 서버에 과거 대화 저장/검색
+  - 로컬 ChromaDB PersistentClient로 과거 대화 저장/검색 (Docker 불필요)
   - chromadb.DefaultEmbeddingFunction(onnxruntime) 으로 임베딩 생성
   - 캐릭터 지식 베이스 관리 (data/knowledge/*.md)
   - 방송 시청자 이름/닉네임 매핑 기억
+  - 크롤링/외부 데이터 RAG 저장
 
 환경변수:
-  CHROMA_HOST  — ChromaDB 서버 호스트 (기본: localhost)
-  CHROMA_PORT  — ChromaDB 서버 포트  (기본: 8010)
+  CHROMA_DATA_DIR  — ChromaDB 데이터 저장 디렉토리 (기본: ./data/chromadb)
   CHAT_DISABLE_RAG — 1 이면 RAG 전체 비활성화
 """
 
@@ -30,11 +30,12 @@ _VIEWER_CACHE_PATH = str(_DATA_DIR / "viewer_names.json")
 
 
 class MemoryEngine:
-    """RAG 기반 대화 기억 엔진 (ChromaDB HTTP 클라이언트 버전).
+    """RAG 기반 대화 기억 엔진 (ChromaDB PersistentClient).
 
-    ChromaDB Docker 컨테이너에 HTTP로 연결하며 두 가지 컬렉션을 관리한다:
+    로컬 파일 기반 ChromaDB PersistentClient를 사용한다 (Docker 불필요).
+    두 가지 컬렉션을 관리한다:
       conversations — 과거 대화 Q&A 쌍 (유사 대화 검색용)
-      knowledge     — 캐릭터 지식 베이스 문서 청크
+      knowledge     — 캐릭터 지식 베이스 문서 청크 + 크롤링 데이터
 
     초기화는 첫 호출 시 지연 실행된다.
     """
@@ -49,19 +50,20 @@ class MemoryEngine:
     # ── 초기화 (지연 로딩) ────────────────────────────────────────
 
     def _init_db(self):
-        """ChromaDB HTTP 클라이언트 및 컬렉션 초기화."""
+        """ChromaDB PersistentClient 및 컬렉션 초기화."""
         if self._client is not None:
             return
 
         import chromadb
         from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
-        host = os.environ.get("CHROMA_HOST", "localhost")
-        port = int(os.environ.get("CHROMA_PORT", "8010"))
-
-        self._client = chromadb.HttpClient(host=host, port=port)
-        # 연결 확인 — 서버 다운 시 여기서 예외 발생
-        self._client.heartbeat()
+        data_dir = os.environ.get("CHROMA_DATA_DIR", "./data/chromadb")
+        # 상대 경로면 chat 모듈 기준으로 해석
+        if not os.path.isabs(data_dir):
+            data_dir = str(Path(__file__).parent.parent / data_dir)
+        os.makedirs(data_dir, exist_ok=True)
+        self._client = chromadb.PersistentClient(path=data_dir)
+        logger.info(f"[Memory] ChromaDB PersistentClient 초기화: {data_dir}")
 
         # sentence-transformers 없이 onnxruntime 기반 경량 임베딩 사용
         ef = DefaultEmbeddingFunction()
@@ -78,8 +80,6 @@ class MemoryEngine:
             embedding_function=ef,
             metadata={**dist_meta, "description": "시온 캐릭터 지식 베이스"},
         )
-
-        logger.info(f"[Memory] ChromaDB HTTP 연결 완료: {host}:{port}")
 
     # ── 시청자 이름 관리 ─────────────────────────────────────────
 
@@ -356,22 +356,83 @@ class MemoryEngine:
 
         return chunks
 
+    # ── 크롤링/외부 데이터 저장 ─────────────────────────────────
+
+    def store_crawl_sync(
+        self,
+        content: str,
+        source: str = "crawl",
+        metadata: Optional[dict] = None,
+    ):
+        """크롤링/외부 데이터를 knowledge 컬렉션에 저장 (동기)."""
+        try:
+            self._init_db()
+
+            chunks = self._split_text(content, chunk_size=400, overlap=50)
+            if not chunks:
+                return 0
+
+            ids, documents, metadatas = [], [], []
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+            for i, chunk in enumerate(chunks):
+                if not chunk.strip():
+                    continue
+                ids.append(f"crawl_{ts}_{i}")
+                documents.append(chunk)
+                meta = {
+                    "source": source,
+                    "chunk": i,
+                    "timestamp": datetime.now().isoformat(),
+                    "type": "crawl",
+                }
+                if metadata:
+                    meta.update(metadata)
+                metadatas.append(meta)
+
+            if documents:
+                self._knowledge_collection.add(
+                    ids=ids,
+                    documents=documents,
+                    metadatas=metadatas,
+                )
+                logger.info(
+                    f"[Memory] 크롤링 데이터 저장: {len(documents)}개 청크 (source={source})"
+                )
+            return len(documents)
+        except Exception as e:
+            logger.warning(f"[Memory] 크롤링 데이터 저장 실패: {e}")
+            return 0
+
+    async def store_crawl(
+        self,
+        content: str,
+        source: str = "crawl",
+        metadata: Optional[dict] = None,
+    ) -> int:
+        """크롤링 데이터 저장 비동기 래퍼. 저장된 청크 수를 반환."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.store_crawl_sync(content, source, metadata),
+        )
+
     # ── 통계 ─────────────────────────────────────────────────────
 
     def get_stats(self) -> dict:
         """DB 사용 현황 통계를 반환한다."""
-        host = os.environ.get("CHROMA_HOST", "localhost")
-        port = os.environ.get("CHROMA_PORT", "8010")
+        data_dir = os.environ.get("CHROMA_DATA_DIR", "./data/chromadb")
+        backend = f"PersistentClient({data_dir})"
         try:
             self._init_db()
             return {
                 "conversations": self._conv_collection.count(),
                 "knowledge_chunks": self._knowledge_collection.count(),
-                "chroma_server": f"{host}:{port}",
+                "chroma_backend": backend,
                 "viewer_count": len(self._viewer_cache),
             }
         except Exception as e:
-            return {"error": str(e), "chroma_server": f"{host}:{port}"}
+            return {"error": str(e), "chroma_backend": backend}
 
 
 # ── 싱글톤 ───────────────────────────────────────────────────────

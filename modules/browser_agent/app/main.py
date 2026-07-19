@@ -24,8 +24,9 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 _root = Path(__file__).resolve().parents[3]
@@ -37,6 +38,7 @@ except ImportError:
 
 from .browser_controller import BrowserController
 from .album_review import AlbumReviewer
+from .web_surfer import WebSurfer, LIVE_VIEWER_HTML
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ PORT = int(os.environ.get("AI_BROWSER_AGENT_PORT", "8007"))
 
 browser: Optional[BrowserController] = None
 reviewer: Optional[AlbumReviewer] = None
+surfer: Optional[WebSurfer] = None
 
 
 # ── Pydantic 스키마 ───────────────────────────────────────────────
@@ -64,11 +67,14 @@ class AlbumReviewRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global browser, reviewer
+    global browser, reviewer, surfer
     browser = BrowserController()
     reviewer = AlbumReviewer(browser)
+    surfer = WebSurfer()
     logger.info("[BrowserAgent] 모듈 초기화 완료 (브라우저 미시작)")
     yield
+    if surfer and surfer.is_running:
+        await surfer.stop()
     if browser and browser.is_running:
         await browser.stop()
     logger.info("[BrowserAgent] 모듈 종료")
@@ -319,6 +325,127 @@ async def album_review_cancel():
         return {"success": True, "message": "진행 중인 리뷰가 없습니다."}
     reviewer.cancel()
     return {"success": True, "message": "리뷰 취소를 요청했습니다."}
+
+
+# ── 자율 웹서핑 ──────────────────────────────────────────────────
+
+
+class SurfRequest(BaseModel):
+    message: str = Field(..., description="자연어 웹서핑 요청 (예: '고양이 품종 검색해줘')")
+    author: str = Field(default="시청자", description="요청한 시청자 닉네임")
+    switch_scene: bool = Field(default=True, description="OBS web_browser 씬으로 자동 전환")
+    max_results: int = Field(
+        default=1, ge=1, le=5,
+        description="방문할 검색 결과 수 (1=기존 동작, 2~5=여러 결과 순회)",
+    )
+
+
+@app.post("/browser/surf")
+async def browser_surf(req: SurfRequest):
+    """자연어 웹서핑 요청을 처리한다.
+
+    1. OBS를 web_browser 씬으로 전환 (browser_source → 라이브 뷰어)
+    2. Playwright로 검색/탐색
+    3. 실시간 스크린샷 → OBS 표시
+    4. LLM 요약 → TTS 음성 출력
+    """
+    if not surfer:
+        raise HTTPException(500, "WebSurfer 초기화 실패")
+
+    if surfer.is_busy:
+        raise HTTPException(409, "이미 웹서핑 처리 중입니다.")
+
+    # OBS browser_source를 라이브 뷰어로 전환
+    if req.switch_scene:
+        try:
+            live_url = f"http://localhost:{PORT}/browser/live"
+            await show_page(ShowPageRequest(
+                url=live_url,
+                scene="web_browser",
+                source="album_yt_browser",
+                switch_scene=True,
+                width=1920,
+                height=1080,
+            ))
+        except Exception as e:
+            logger.warning("[Surf] OBS 씬 전환 실패 (계속 진행): %s", e)
+
+    # 백그라운드에서 서핑 실행
+    result = await surfer.surf(req.message, req.author, max_results=req.max_results)
+    return result
+
+
+@app.post("/browser/surf/back")
+async def surf_go_back():
+    """웹서핑 뒤로 가기."""
+    if not surfer or not surfer.is_running:
+        raise HTTPException(400, "WebSurfer가 실행 중이 아닙니다.")
+    await surfer.go_back()
+    return {"success": True, "url": surfer.current_url}
+
+
+@app.post("/browser/surf/stop")
+async def surf_stop():
+    """웹서핑을 종료하고 Radio Mode로 복귀."""
+    if surfer and surfer.is_running:
+        await surfer.stop()
+
+    # OBS Radio Mode로 전환
+    try:
+        cl = _get_obs_client()
+        cl.set_current_program_scene("Radio Mode")
+    except Exception:
+        pass
+
+    return {"success": True, "message": "웹서핑 종료, Radio Mode 복귀"}
+
+
+@app.get("/browser/surf/status")
+async def surf_status():
+    """WebSurfer 상태 조회."""
+    return {
+        "running": surfer.is_running if surfer else False,
+        "busy": surfer.is_busy if surfer else False,
+        "current_url": surfer.current_url if surfer else "",
+        "viewers": len(surfer._viewer_queues) if surfer else 0,
+    }
+
+
+# ── 라이브 뷰어 (OBS browser_source용) ───────────────────────────
+
+
+@app.get("/browser/live")
+async def browser_live():
+    """실시간 스크린샷 뷰어 HTML 페이지."""
+    return HTMLResponse(content=LIVE_VIEWER_HTML)
+
+
+@app.websocket("/browser/live/ws")
+async def browser_live_ws(websocket: WebSocket):
+    """실시간 스크린샷 WebSocket 스트리밍."""
+    await websocket.accept()
+
+    if not surfer:
+        await websocket.close(reason="WebSurfer not initialized")
+        return
+
+    # 브라우저 미실행 시 자동 시작
+    if not surfer.is_running:
+        await surfer.start()
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=3)
+    surfer.add_viewer(queue)
+
+    try:
+        while True:
+            b64 = await queue.get()
+            await websocket.send_text(b64)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.debug("[LiveWS] connection error: %s", e)
+    finally:
+        surfer.remove_viewer(queue)
 
 
 # ── 실행 ──────────────────────────────────────────────────────────

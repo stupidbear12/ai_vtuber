@@ -3,6 +3,6 @@ uvicorn[standard]>=0.23.0
 aiohttp>=3.9.0
 python-dotenv>=1.0.0
 
-# RAG 메모리 시스템 (Docker ChromaDB HTTP 클라이언트)
+# RAG 메모리 시스템 (로컬 PersistentClient, Docker 불필요)
 # [default] 추가분: onnxruntime 기반 DefaultEmbeddingFunction (PyTorch 불필요)
 chromadb[default]>=0.5.0
