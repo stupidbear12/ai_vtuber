@@ -1480,17 +1480,19 @@ class BroadcastChatManager:
         await handler(content)
 
     async def _action_search(self, content: str) -> None:
-        """웹 검색 → browser_agent(8007) 호출.
+        """웹 검색 → browser_agent(8007) 호출 (상위 3개 결과 순회).
 
         검색 중에는 _surf_active 플래그를 설정하여 TTS 충돌을 방지한다.
         검색 결과는 _crawl_results에 저장하여 이후 react 행동에서 활용한다.
+        max_results=3으로 요청하여 여러 페이지를 순회하고,
+        각 결과를 개별적으로 RAG에 저장한다.
 
         Args:
             content: 검색 키워드
         """
         surf_url = os.environ.get("AI_BROWSER_AGENT_URL", "http://localhost:8007")
         self._surf_active = True
-        logger.info("[AutonomousPlanner] 웹 검색 시작: %s", content)
+        logger.info("[AutonomousPlanner] 웹 검색 시작 (deep): %s", content)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -1499,23 +1501,47 @@ class BroadcastChatManager:
                         "message": f"{content} 검색해줘",
                         "author": "시온",
                         "switch_scene": True,
+                        "max_results": 3,
                     },
-                    timeout=aiohttp.ClientTimeout(total=60.0),
+                    timeout=aiohttp.ClientTimeout(total=120.0),
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # browser_agent 응답에서 요약 추출
+                        # 전체 요약 저장
                         summary = data.get("summary", data.get("reply", data.get("url", "")))
                         if summary:
                             crawl_entry = f"[{content}] {str(summary)[:200]}"
                             self._crawl_results.append(crawl_entry)
-                            # ── RAG 저장: 크롤링 결과를 chat 모듈 ChromaDB에 저장 ──
-                            await self._store_crawl_to_rag(
-                                content=str(summary),
-                                source=f"crawl:{content}",
-                                url=data.get("url", ""),
+
+                        # 개별 결과가 있으면 각각 RAG에 저장
+                        results = data.get("results", [])
+                        if results:
+                            for i, r in enumerate(results):
+                                r_text = r.get("text", "")
+                                r_url = r.get("url", "")
+                                r_title = r.get("title", "")
+                                if r_text:
+                                    await self._store_crawl_to_rag(
+                                        content=r_text,
+                                        source=f"crawl:{content}:{r_title[:30]}",
+                                        url=r_url,
+                                    )
+                            logger.info(
+                                "[AutonomousPlanner] 검색 완료 (deep): %s → %d개 결과 RAG 저장",
+                                content, len(results),
                             )
-                        logger.info("[AutonomousPlanner] 검색 완료: %s → %s", content, str(summary)[:80])
+                        else:
+                            # 개별 결과 없으면 전체 요약이라도 저장
+                            if summary:
+                                await self._store_crawl_to_rag(
+                                    content=str(summary),
+                                    source=f"crawl:{content}",
+                                    url=data.get("url", ""),
+                                )
+                            logger.info(
+                                "[AutonomousPlanner] 검색 완료: %s → %s",
+                                content, str(summary)[:80],
+                            )
                     else:
                         body = await resp.text()
                         logger.warning(

@@ -255,6 +255,200 @@ class WebSurfer:
         except Exception as e:
             return f"클릭 실패: {e}"
 
+    async def search_deep(self, query: str, max_results: int = 3) -> list[dict]:
+        """검색 후 상위 N개 결과를 순회하며 텍스트 수집.
+
+        각 페이지에서 스크롤을 2~3회 수행하여 더 많은 콘텐츠를 수집한다.
+        reCAPTCHA 감지, 타임아웃, 빈 페이지 등은 스킵하고 다음 결과로 넘어간다.
+
+        Args:
+            query: 검색어
+            max_results: 방문할 최대 결과 수 (기본 3, 최대 5)
+
+        Returns:
+            [{"url": str, "title": str, "text": str}, ...] 방문한 페이지 목록
+        """
+        if not self._running:
+            await self.start()
+
+        max_results = min(max_results, 5)
+        import urllib.parse
+        encoded = urllib.parse.quote(query)
+
+        # 검색 엔진별 URL
+        if self.search_engine == "google":
+            search_url = f"https://www.google.com/search?q={encoded}&hl=ko"
+        else:
+            search_url = f"https://search.naver.com/search.naver?query={encoded}"
+
+        await self._page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+        self._current_url = self._page.url
+        await asyncio.sleep(2)
+
+        # reCAPTCHA 감지 → 네이버 폴백
+        page_text = await self._page.evaluate("document.body.innerText")
+        used_engine = self.search_engine
+        if "I'm not a robot" in page_text or "reCAPTCHA" in page_text:
+            logger.warning("[WebSurfer] Google reCAPTCHA 감지, 네이버로 폴백")
+            search_url = f"https://search.naver.com/search.naver?query={encoded}"
+            await self._page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+            self._current_url = self._page.url
+            await asyncio.sleep(2)
+            used_engine = "naver"
+
+        # 검색 결과 링크 수집
+        result_links = await self._collect_search_links(used_engine, max_results)
+        if not result_links:
+            logger.warning("[WebSurfer] search_deep: 검색 결과 링크를 찾지 못함")
+            # 검색 결과 페이지 텍스트라도 반환
+            fallback_text = await self._page.evaluate("document.body.innerText")
+            return [{"url": self._page.url, "title": query, "text": fallback_text[:3000]}]
+
+        # 검색 결과 페이지 URL 저장 (복귀용)
+        search_page_url = self._page.url
+
+        collected = []
+        for i, link_info in enumerate(result_links):
+            link_url = link_info.get("url", "")
+            link_title = link_info.get("title", f"결과 {i+1}")
+
+            if not link_url:
+                continue
+
+            logger.info("[WebSurfer] search_deep: 결과 %d/%d 방문: %s",
+                        i + 1, len(result_links), link_url[:80])
+            try:
+                # 페이지 방문
+                await self._page.goto(link_url, wait_until="domcontentloaded", timeout=12000)
+                self._current_url = self._page.url
+                await asyncio.sleep(1.5)
+
+                # reCAPTCHA / 차단 페이지 감지 → 스킵
+                check_text = await self._page.evaluate("document.body.innerText")
+                if "I'm not a robot" in check_text or "reCAPTCHA" in check_text:
+                    logger.warning("[WebSurfer] search_deep: 결과 %d reCAPTCHA 감지, 스킵", i + 1)
+                    continue
+                if len(check_text.strip()) < 50:
+                    logger.warning("[WebSurfer] search_deep: 결과 %d 빈 페이지, 스킵", i + 1)
+                    continue
+
+                # 페이지 텍스트 수집 + 스크롤
+                full_text = await self._collect_page_with_scroll(max_scrolls=2)
+                collected.append({
+                    "url": self._page.url,
+                    "title": link_title,
+                    "text": full_text[:3000],
+                })
+                logger.info("[WebSurfer] search_deep: 결과 %d 수집 완료 (%d chars)",
+                            i + 1, len(full_text))
+
+            except Exception as e:
+                logger.warning("[WebSurfer] search_deep: 결과 %d 방문 실패: %s", i + 1, e)
+                continue
+
+            # 검색 결과 페이지로 복귀 (다음 결과 방문을 위해)
+            if i < len(result_links) - 1:
+                try:
+                    await self._page.goto(search_page_url, wait_until="domcontentloaded", timeout=10000)
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+
+        if not collected:
+            # 모든 결과 방문 실패 시 검색 결과 페이지 텍스트 반환
+            try:
+                await self._page.goto(search_page_url, wait_until="domcontentloaded", timeout=10000)
+                fallback_text = await self._page.evaluate("document.body.innerText")
+                return [{"url": search_page_url, "title": query, "text": fallback_text[:3000]}]
+            except Exception:
+                return [{"url": search_page_url, "title": query, "text": "검색 결과 수집 실패"}]
+
+        return collected
+
+    async def _collect_search_links(self, engine: str, max_count: int) -> list[dict]:
+        """검색 결과 페이지에서 결과 링크와 제목을 파싱한다.
+
+        Args:
+            engine: "google" 또는 "naver"
+            max_count: 수집할 최대 링크 수
+
+        Returns:
+            [{"url": str, "title": str}, ...]
+        """
+        try:
+            if engine == "google":
+                # Google: #search 내의 a[href] 중 실제 결과 링크만 수집
+                links_data = await self._page.evaluate("""() => {
+                    const results = [];
+                    // Google 검색 결과의 h3 부모 a 태그
+                    const h3s = document.querySelectorAll('#search h3');
+                    for (const h3 of h3s) {
+                        const a = h3.closest('a');
+                        if (a && a.href && !a.href.includes('google.com')
+                            && a.href.startsWith('http')) {
+                            results.push({url: a.href, title: h3.innerText || ''});
+                        }
+                    }
+                    return results;
+                }""")
+            else:
+                # Naver: 다양한 검색 결과 셀렉터
+                links_data = await self._page.evaluate("""() => {
+                    const results = [];
+                    const selectors = [
+                        'a.link_tit', 'a.api_txt_lines', '.total_tit a',
+                        '.news_tit', '.link_tit', '.sh_blog_title'
+                    ];
+                    const seen = new Set();
+                    for (const sel of selectors) {
+                        for (const a of document.querySelectorAll(sel)) {
+                            if (a.href && !seen.has(a.href)
+                                && a.href.startsWith('http')
+                                && !a.href.includes('naver.com/search')) {
+                                seen.add(a.href);
+                                results.push({url: a.href, title: a.innerText || ''});
+                            }
+                        }
+                    }
+                    return results;
+                }""")
+
+            # 결과 수 제한
+            return (links_data or [])[:max_count]
+        except Exception as e:
+            logger.warning("[WebSurfer] _collect_search_links 실패: %s", e)
+            return []
+
+    async def _collect_page_with_scroll(self, max_scrolls: int = 2) -> str:
+        """현재 페이지의 텍스트를 수집하면서 스크롤하여 추가 콘텐츠를 확보한다.
+
+        Args:
+            max_scrolls: 최대 스크롤 횟수 (기본 2)
+
+        Returns:
+            수집된 전체 텍스트
+        """
+        if not self._page:
+            return ""
+
+        # 초기 텍스트
+        text = await self._page.evaluate("document.body.innerText")
+
+        for i in range(max_scrolls):
+            prev_len = len(text)
+            await self._page.mouse.wheel(0, 800)
+            await asyncio.sleep(1.0)
+
+            new_text = await self._page.evaluate("document.body.innerText")
+            if len(new_text) > prev_len:
+                text = new_text
+                logger.debug("[WebSurfer] 스크롤 %d: +%d chars", i + 1, len(new_text) - prev_len)
+            else:
+                # 추가 콘텐츠 없음 → 스크롤 중단
+                break
+
+        return text
+
     async def scroll_down(self):
         """페이지 스크롤 다운."""
         if self._page:
@@ -270,14 +464,20 @@ class WebSurfer:
 
     # ── 메인 서핑 로직 ────────────────────────────────────────────
 
-    async def surf(self, user_message: str, author: str = "시청자") -> dict:
+    async def surf(self, user_message: str, author: str = "시청자",
+                   max_results: int = 1) -> dict:
         """
         자연어 웹서핑 요청 처리 파이프라인:
           1. LLM → 의도 파싱 (search / navigate)
           2. Playwright → 브라우저 조작
-          3. 첫 번째 결과 클릭 (검색인 경우)
+          3. 검색인 경우: max_results에 따라 단일/다중 결과 방문
           4. LLM → 페이지 요약
           5. TTS → 시온이 설명
+
+        Args:
+            user_message: 자연어 웹서핑 요청
+            author: 요청자 닉네임
+            max_results: 방문할 검색 결과 수 (1이면 기존 동작, 2+ 이면 deep 검색)
         """
         if self._busy:
             return {"error": "이미 웹서핑 중입니다."}
@@ -290,19 +490,30 @@ class WebSurfer:
             # 1. 의도 파싱
             intent = await self._parse_intent(user_message)
             action = intent.get("action", "search")
-            logger.info("[WebSurfer] surf: action=%s, intent=%s", action, intent)
+            logger.info("[WebSurfer] surf: action=%s, intent=%s, max_results=%d",
+                        action, intent, max_results)
 
             # 2. 브라우저 조작
             if action == "navigate":
                 page_text = await self.navigate(intent.get("url", ""))
+                results_list = None
+            elif max_results > 1:
+                # 다중 결과 순회 (deep 검색)
+                query = intent.get("query", user_message)
+                results_list = await self.search_deep(query, max_results=max_results)
+                # 요약용 텍스트: 각 결과를 합산
+                page_text = "\n\n".join(
+                    f"[{r['title']}]\n{r['text'][:1500]}" for r in results_list
+                )[:4000]
             else:
+                # 기존 동작: 단일 결과
                 query = intent.get("query", user_message)
                 page_text = await self.search(query)
-                # 검색 후 첫 번째 결과 클릭
                 await asyncio.sleep(1)
                 detail_text = await self.click_result(0)
                 if "클릭 실패" not in detail_text and "없습니다" not in detail_text:
                     page_text = detail_text
+                results_list = None
 
             # 3. 페이지 요약
             summary = await self._summarize(user_message, page_text)
@@ -310,12 +521,21 @@ class WebSurfer:
             # 4. TTS로 말하기
             await self._speak(summary, author)
 
-            return {
+            response = {
                 "success": True,
                 "action": action,
                 "url": self._current_url,
                 "summary": summary,
             }
+            # deep 검색 시 개별 결과도 반환 (chat_collector에서 활용)
+            if results_list:
+                response["results"] = [
+                    {"url": r["url"], "title": r["title"], "text": r["text"][:500]}
+                    for r in results_list
+                ]
+                response["results_count"] = len(results_list)
+
+            return response
 
         except Exception as e:
             logger.error("[WebSurfer] surf error: %s", e)

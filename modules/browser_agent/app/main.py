@@ -334,6 +334,10 @@ class SurfRequest(BaseModel):
     message: str = Field(..., description="자연어 웹서핑 요청 (예: '고양이 품종 검색해줘')")
     author: str = Field(default="시청자", description="요청한 시청자 닉네임")
     switch_scene: bool = Field(default=True, description="OBS web_browser 씬으로 자동 전환")
+    max_results: int = Field(
+        default=1, ge=1, le=5,
+        description="방문할 검색 결과 수 (1=기존 동작, 2~5=여러 결과 순회)",
+    )
 
 
 @app.post("/browser/surf")
@@ -367,7 +371,7 @@ async def browser_surf(req: SurfRequest):
             logger.warning("[Surf] OBS 씬 전환 실패 (계속 진행): %s", e)
 
     # 백그라운드에서 서핑 실행
-    result = await surfer.surf(req.message, req.author)
+    result = await surfer.surf(req.message, req.author, max_results=req.max_results)
     return result
 
 
