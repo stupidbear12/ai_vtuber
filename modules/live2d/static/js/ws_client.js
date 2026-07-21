@@ -23,6 +23,10 @@ class Live2DWSClient {
     this._lipsyncTimer  = null;
     this._lipsyncCtx    = null;
 
+    // speak 큐 — 동시에 여러 speak이 오면 순차 재생
+    this._speakQueue    = [];
+    this._speakPlaying  = false;
+
     // OBS Browser Source 자동재생 허용을 위한 AudioContext 워밍업
     this._warmupAudioContext();
   }
@@ -152,6 +156,25 @@ class Live2DWSClient {
    *   3. TTS 오디오 재생 + 립싱크
    */
   _handleSpeak(msg) {
+    // speak 큐에 추가하고 순차 처리
+    this._speakQueue.push(msg);
+    this._log('[speak] queued (' + this._speakQueue.length + '): ' + (msg.text || '').slice(0, 40));
+    if (!this._speakPlaying) {
+      this._processNextSpeak();
+    }
+  }
+
+  _processNextSpeak() {
+    if (this._speakQueue.length === 0) {
+      this._speakPlaying = false;
+      return;
+    }
+    this._speakPlaying = true;
+    const msg = this._speakQueue.shift();
+    this._executeSpeak(msg);
+  }
+
+  _executeSpeak(msg) {
     const { text, emotion, author, platform, is_donation, audio_base64 } = msg;
 
     // 1) 감정 표정 변경
@@ -181,7 +204,13 @@ class Live2DWSClient {
 
     // 3) TTS 오디오 재생 (base64 WAV, GPT-SoVITS)
     if (audio_base64) {
-      this._playAudio(audio_base64);
+      this._playAudioQueued(audio_base64);
+    } else {
+      // 오디오 없으면 3초 후 자막 숨기고 다음 speak 처리
+      setTimeout(() => {
+        this._hideSubtitle();
+        this._processNextSpeak();
+      }, 3000);
     }
 
     this._log('[speak] ' + (text || '').slice(0, 40));
@@ -189,8 +218,20 @@ class Live2DWSClient {
 
   /**
    * base64 인코딩된 WAV 오디오를 재생하고 립싱크를 연동한다.
+   * (직접 호출용 — 큐 미사용)
    */
   _playAudio(base64) {
+    this._playAudioInternal(base64, false);
+  }
+
+  /**
+   * speak 큐에서 호출 — 재생 완료 후 다음 speak 처리.
+   */
+  _playAudioQueued(base64) {
+    this._playAudioInternal(base64, true);
+  }
+
+  _playAudioInternal(base64, queued) {
     // 이전 재생 중단
     this._stopAudio();
 
@@ -200,12 +241,13 @@ class Live2DWSClient {
       const audio = new Audio(url);
       this._currentAudio = audio;
 
-      // 재생 종료 -> 립싱크 정지 + 자막 숨김
+      // 재생 종료 -> 립싱크 정지 + 자막 숨김 + 큐 다음 처리
       audio.addEventListener('ended', () => {
         this._stopLipsync();
         this._hideSubtitle();
         URL.revokeObjectURL(url);
         this._currentAudio = null;
+        if (queued) this._processNextSpeak();
       });
 
       audio.addEventListener('error', (e) => {
@@ -213,15 +255,15 @@ class Live2DWSClient {
         this._stopLipsync();
         this._currentAudio = null;
         URL.revokeObjectURL(url);
+        if (queued) this._processNextSpeak();
       });
 
       // AudioContext + 립싱크를 먼저 설정한 뒤 재생
-      // (createMediaElementSource가 오디오 출력을 AudioContext로 리라우트하므로
-      //  context가 running 상태여야 소리가 남)
       this._setupAndPlay(audio, url);
 
     } catch (err) {
       console.error('[Speak] audio processing error:', err);
+      if (queued) this._processNextSpeak();
     }
   }
 

@@ -403,11 +403,56 @@ async def surf_stop():
 @app.get("/browser/surf/status")
 async def surf_status():
     """WebSurfer 상태 조회."""
+    import time
+    busy_elapsed = 0.0
+    if surfer and surfer._busy and surfer._busy_since > 0:
+        busy_elapsed = round(time.time() - surfer._busy_since, 1)
     return {
         "running": surfer.is_running if surfer else False,
         "busy": surfer.is_busy if surfer else False,
+        "busy_elapsed_sec": busy_elapsed,
+        "busy_timeout_sec": surfer._busy_timeout if surfer else 0,
         "current_url": surfer.current_url if surfer else "",
         "viewers": len(surfer._viewer_queues) if surfer else 0,
+    }
+
+
+class LoginRequest(BaseModel):
+    url: str = Field(default="https://www.dbpia.co.kr", description="로그인할 사이트 URL")
+
+
+@app.post("/browser/surf/login")
+async def surf_login_mode(req: LoginRequest):
+    """로그인용 visible 브라우저 모드.
+
+    headless=False로 브라우저를 열어 사용자가 직접 로그인할 수 있게 한다.
+    persistent context이므로 로그인 후 쿠키/세션이 디스크에 저장되어
+    이후 headless 모드에서도 로그인 상태가 유지된다.
+
+    로그인 완료 후 POST /browser/surf/stop 으로 브라우저를 닫고
+    다시 headless로 재시작하면 됨.
+    """
+    global surfer
+    if not surfer:
+        raise HTTPException(500, "WebSurfer가 초기화되지 않았습니다.")
+
+    # 기존 브라우저가 실행 중이면 종료
+    if surfer.is_running:
+        await surfer.stop()
+
+    # visible 모드로 시작
+    await surfer.start(headless=False)
+
+    # 요청된 URL로 이동
+    try:
+        await surfer._page.goto(req.url, wait_until="domcontentloaded", timeout=15000)
+    except Exception as e:
+        logger.warning("[LoginMode] 페이지 이동 실패: %s", e)
+
+    return {
+        "success": True,
+        "message": f"로그인 브라우저가 열렸습니다. {req.url} 에서 로그인해주세요. 완료 후 POST /browser/surf/stop 호출.",
+        "url": surfer.current_url,
     }
 
 

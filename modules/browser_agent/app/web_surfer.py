@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import os
+import time
 from typing import Optional, Set
 
 import httpx
@@ -24,15 +25,24 @@ logger = logging.getLogger("web_surfer")
 class WebSurfer:
     """Playwright 기반 자율 웹서핑 엔진."""
 
+    # 브라우저 프로필 저장 경로 (persistent context)
+    DEFAULT_USER_DATA_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "browser_profile",
+    )
+
     def __init__(self):
         self._playwright = None
-        self._browser = None
+        self._browser = None  # persistent context에서는 사용하지 않음
+        self._context = None  # persistent browser context
         self._page = None
         self._running = False
         self._streaming = False
         self._stream_task: Optional[asyncio.Task] = None
         self._current_url = ""
         self._busy = False  # 서핑 처리 중 여부
+        self._busy_since: float = 0.0  # busy 시작 시각
+        self._busy_timeout: int = int(os.environ.get("SURF_BUSY_TIMEOUT", "90"))  # busy 타임아웃 (초)
 
         # WebSocket 뷰어 큐 (OBS browser_source 실시간 표시용)
         self._viewer_queues: Set[asyncio.Queue] = set()
@@ -45,6 +55,11 @@ class WebSurfer:
 
         # 검색 엔진: "google" 또는 "naver" (기본: google)
         self.search_engine = os.environ.get("SURF_SEARCH_ENGINE", "google").lower()
+
+        # persistent context 경로
+        self._user_data_dir = os.environ.get(
+            "BROWSER_USER_DATA_DIR", self.DEFAULT_USER_DATA_DIR
+        )
 
     # ── 프로퍼티 ──────────────────────────────────────────────────
 
@@ -62,24 +77,26 @@ class WebSurfer:
 
     # ── 라이프사이클 ──────────────────────────────────────────────
 
-    async def start(self):
-        """Playwright headless 브라우저 시작."""
+    async def start(self, headless: bool = True):
+        """Playwright persistent context 브라우저 시작.
+
+        Args:
+            headless: True=일반 서핑 모드, False=로그인 등 수동 조작 모드
+        """
         if self._running:
             return
 
         from playwright.async_api import async_playwright
 
+        # user_data_dir 디렉토리 생성
+        os.makedirs(self._user_data_dir, exist_ok=True)
+
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-        context = await self._browser.new_context(
+
+        # persistent context: 쿠키/세션/로그인 상태가 디스크에 저장됨
+        launch_kwargs = dict(
+            user_data_dir=self._user_data_dir,
+            headless=headless,
             viewport={"width": 1920, "height": 1080},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -87,8 +104,25 @@ class WebSurfer:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
             locale="ko-KR",
+            args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
-        self._page = await context.new_page()
+        # visible 모드에서는 시스템 Chrome 사용 (Playwright 내장 Chromium은 spawn 실패)
+        if not headless:
+            launch_kwargs["channel"] = "chrome"
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            **launch_kwargs,
+        )
+
+        # persistent context는 기본 페이지가 이미 열려 있을 수 있음
+        if self._context.pages:
+            self._page = self._context.pages[0]
+        else:
+            self._page = await self._context.new_page()
 
         # Stealth: navigator.webdriver 숨기기
         await self._page.add_init_script("""
@@ -105,7 +139,8 @@ class WebSurfer:
 
         # 스크린샷 스트리밍 시작
         self._stream_task = asyncio.create_task(self._screenshot_loop())
-        logger.info("[WebSurfer] Playwright 브라우저 시작 (headless, 1920x1080)")
+        mode = "visible (로그인 모드)" if not headless else "headless"
+        logger.info("[WebSurfer] Playwright 브라우저 시작 (%s, persistent context, 1920x1080)", mode)
 
     async def stop(self):
         """브라우저 종료."""
@@ -119,6 +154,11 @@ class WebSurfer:
                 await self._page.close()
             except Exception:
                 pass
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
         if self._browser:
             try:
                 await self._browser.close()
@@ -129,7 +169,7 @@ class WebSurfer:
                 await self._playwright.stop()
             except Exception:
                 pass
-        self._page = self._browser = self._playwright = None
+        self._page = self._browser = self._context = self._playwright = None
         logger.info("[WebSurfer] 브라우저 종료")
 
     # ── 스크린샷 스트리밍 ─────────────────────────────────────────
@@ -143,8 +183,18 @@ class WebSurfer:
         logger.debug("[WebSurfer] Viewer 해제 (total=%d)", len(self._viewer_queues))
 
     async def _screenshot_loop(self):
-        """2 FPS로 스크린샷을 뷰어들에게 전송."""
+        """2 FPS로 스크린샷을 뷰어들에게 전송 + busy 타임아웃 감시."""
         while self._running:
+            # ── busy 타임아웃 감시 ──
+            if self._busy and self._busy_since > 0:
+                elapsed = time.time() - self._busy_since
+                if elapsed > self._busy_timeout:
+                    logger.warning(
+                        "[WebSurfer] busy timeout! elapsed=%.1fs > %ds, force reset",
+                        elapsed, self._busy_timeout,
+                    )
+                    await self._force_reset_busy()
+
             if self._viewer_queues and self._page:
                 try:
                     jpg = await self._page.screenshot(type="jpeg", quality=75)
@@ -166,12 +216,164 @@ class WebSurfer:
                     logger.debug("[WebSurfer] screenshot error: %s", e)
             await asyncio.sleep(0.5)
 
+    async def _force_reset_busy(self):
+        """busy 타임아웃 시 강제 리셋: 현재 작업 중단 + Google로 복귀."""
+        try:
+            # 페이지 로딩 중단
+            if self._page:
+                try:
+                    await asyncio.wait_for(
+                        self._page.evaluate("window.stop()"), timeout=3
+                    )
+                except Exception:
+                    pass
+                # Google 메인으로 복귀
+                try:
+                    await asyncio.wait_for(
+                        self._page.goto("https://www.google.com", wait_until="domcontentloaded"),
+                        timeout=10,
+                    )
+                    self._current_url = "https://www.google.com"
+                    logger.info("[WebSurfer] force reset: navigated back to Google")
+                except Exception as e:
+                    logger.error("[WebSurfer] force reset navigation failed: %s", e)
+        except Exception as e:
+            logger.error("[WebSurfer] force reset error: %s", e)
+        finally:
+            self._busy = False
+            self._busy_since = 0.0
+
     async def screenshot_base64(self) -> str:
         """현재 페이지 스크린샷 (단발성)."""
         if not self._page:
             raise RuntimeError("브라우저 미실행")
         jpg = await self._page.screenshot(type="jpeg", quality=80)
         return base64.b64encode(jpg).decode()
+
+    # ── 차단 감지 ─────────────────────────────────────────────────
+
+    # Cloudflare / 봇 감지 / 접근 차단 페이지 키워드
+    _BLOCK_KEYWORDS = [
+        # reCAPTCHA
+        "I'm not a robot", "reCAPTCHA",
+        # Cloudflare
+        "Just a moment...", "Checking if the site connection is secure",
+        "Enable JavaScript and cookies to continue",
+        "Attention Required! | Cloudflare",
+        "Please Wait... | Cloudflare",
+        "cf-browser-verification",
+        "Verify you are human",
+        "Please complete the security check",
+        # 접근 차단
+        "Access denied", "Access Denied",
+        "403 Forbidden", "401 Unauthorized",
+        "You don't have permission",
+        "This page isn't available",
+        "Sorry, you have been blocked",
+        "Bot detection", "are you a robot",
+        # 학술/유료 사이트 차단
+        "Sign in to continue", "Institutional access",
+        "Purchase this article", "Subscribe to read",
+    ]
+
+    def _is_blocked_page(self, page_text: str) -> bool:
+        """페이지가 Cloudflare / reCAPTCHA / 봇 차단 페이지인지 감지."""
+        if not page_text or len(page_text.strip()) < 30:
+            return True
+        for kw in self._BLOCK_KEYWORDS:
+            if kw.lower() in page_text.lower():
+                return True
+        return False
+
+    # ── 팝업 자동 처리 ─────────────────────────────────────────────
+
+    async def _dismiss_popups(self) -> None:
+        """쿠키 동의, 광고 팝업, 알림 요청 등을 자동으로 닫는다.
+
+        우선순위:
+          1. 쿠키: 필수만/거부 우선, 없으면 수락
+          2. 광고/이벤트: 닫기/다시 보지 않기 계열
+          3. 모달 X 버튼
+        """
+        if not self._page:
+            return
+
+        # ── Phase 1: 텍스트 기반 버튼 클릭 ──
+        button_texts = [
+            # 쿠키 (개인정보 보호 우선)
+            "필수 쿠키만", "필수만",
+            # 광고/이벤트 팝업 닫기 (가장 흔한 패턴)
+            "닫기", "다시 보지 않기", "3일간 보지 않기", "7일간 보지 않기",
+            "오늘 하루 보지 않기", "오늘 그만 보기", "그만 보기",
+            "나중에", "괜찮습니다", "아니요",
+            # 쿠키 거부/수락
+            "거부", "거절",
+            "모두 수락", "모두 동의", "동의합니다", "동의", "수락",
+            "확인", "계속",
+            # 영어 — 쿠키
+            "Reject All", "Reject", "Decline",
+            "Accept All", "Accept", "I Agree", "Agree",
+            "OK", "Got it", "Close", "Continue",
+            "Accept Cookies", "Accept all cookies",
+            "Allow Essential Only", "Only Necessary",
+            # 영어 — 광고
+            "No thanks", "Not now", "Maybe later", "Dismiss",
+            "Don't show again", "Skip",
+        ]
+
+        # 팝업이 주로 위치하는 컨테이너 + 일반 버튼/링크
+        container_selectors = [
+            "",  # 페이지 전체
+            "div[class*='modal']", "div[class*='popup']",
+            "div[class*='overlay']", "div[class*='dialog']",
+            "div[class*='banner']", "div[class*='notice']",
+            "div[class*='cookie']", "div[class*='consent']",
+            "div[id*='modal']", "div[id*='popup']",
+            "div[id*='cookie']", "div[id*='layer']",
+        ]
+
+        try:
+            for text in button_texts:
+                for container in container_selectors:
+                    for tag in ("button", "a", "[role='button']", "span"):
+                        try:
+                            sel = f'{container} >> {tag}:has-text("{text}")' if container else f'{tag}:has-text("{text}")'
+                            btn = self._page.locator(sel).first
+                            if await btn.is_visible(timeout=200):
+                                await btn.click(timeout=2000)
+                                logger.info("[WebSurfer] 팝업 자동 클릭: '%s'", text)
+                                await asyncio.sleep(0.5)
+                                return
+                        except Exception:
+                            continue
+
+            # ── Phase 2: X 닫기 버튼 (아이콘 기반) ──
+            close_selectors = [
+                # 흔한 모달 X 버튼 패턴
+                "div[class*='modal'] button[class*='close']",
+                "div[class*='popup'] button[class*='close']",
+                "div[class*='overlay'] button[class*='close']",
+                "div[class*='dialog'] button[class*='close']",
+                "button[aria-label='Close']",
+                "button[aria-label='닫기']",
+                "button[class*='close-btn']",
+                "button[class*='btn-close']",
+                "button[class*='closeBtn']",
+                ".modal .close", ".popup .close",
+            ]
+            for sel in close_selectors:
+                try:
+                    btn = self._page.locator(sel).first
+                    if await btn.is_visible(timeout=200):
+                        await btn.click(timeout=2000)
+                        logger.info("[WebSurfer] 팝업 X 버튼 클릭: %s", sel)
+                        await asyncio.sleep(0.5)
+                        return
+                except Exception:
+                    continue
+
+        except Exception as e:
+            logger.debug("[WebSurfer] 팝업 처리 실패 (무시): %s", e)
 
     # ── 브라우저 조작 ─────────────────────────────────────────────
 
@@ -191,15 +393,17 @@ class WebSurfer:
         await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
         self._current_url = self._page.url
         await asyncio.sleep(2)
+        await self._dismiss_popups()
 
-        # reCAPTCHA 감지 → 네이버로 폴백
+        # 차단 감지 (reCAPTCHA / Cloudflare) → 네이버로 폴백
         page_text = await self._page.evaluate("document.body.innerText")
-        if "I'm not a robot" in page_text or "reCAPTCHA" in page_text:
-            logger.warning("[WebSurfer] Google reCAPTCHA 감지, 네이버로 폴백")
+        if self._is_blocked_page(page_text):
+            logger.warning("[WebSurfer] 검색 차단 감지, 네이버로 폴백")
             url = f"https://search.naver.com/search.naver?query={encoded}"
             await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
             self._current_url = self._page.url
             await asyncio.sleep(2)
+            await self._dismiss_popups()
             page_text = await self._page.evaluate("document.body.innerText")
 
         return page_text[:3000]
@@ -219,8 +423,17 @@ class WebSurfer:
 
         self._current_url = self._page.url
         await asyncio.sleep(1.5)
+        await self._dismiss_popups()
 
         text = await self._page.evaluate("document.body.innerText")
+
+        # 차단 감지 → Google로 복귀
+        if self._is_blocked_page(text):
+            logger.warning("[WebSurfer] navigate 차단 감지: %s → Google로 복귀", url[:60])
+            await self._page.goto("https://www.google.com", wait_until="domcontentloaded", timeout=10000)
+            self._current_url = "https://www.google.com"
+            return f"(차단됨: {url})"
+
         return text[:3000]
 
     async def click_result(self, index: int = 0) -> str:
@@ -247,7 +460,14 @@ class WebSurfer:
                 await links[index].click()
                 await asyncio.sleep(2)
                 self._current_url = self._page.url
+                await self._dismiss_popups()
                 text = await self._page.evaluate("document.body.innerText")
+                # 차단 감지 → 뒤로가기
+                if self._is_blocked_page(text):
+                    logger.warning("[WebSurfer] click_result 차단 감지, 뒤로가기")
+                    await self._page.go_back(wait_until="domcontentloaded", timeout=10000)
+                    self._current_url = self._page.url
+                    text = await self._page.evaluate("document.body.innerText")
                 return text[:3000]
             else:
                 # 검색 결과 페이지 텍스트라도 반환
@@ -285,11 +505,11 @@ class WebSurfer:
         self._current_url = self._page.url
         await asyncio.sleep(2)
 
-        # reCAPTCHA 감지 → 네이버 폴백
+        # 차단 감지 (reCAPTCHA / Cloudflare) → 네이버 폴백
         page_text = await self._page.evaluate("document.body.innerText")
         used_engine = self.search_engine
-        if "I'm not a robot" in page_text or "reCAPTCHA" in page_text:
-            logger.warning("[WebSurfer] Google reCAPTCHA 감지, 네이버로 폴백")
+        if self._is_blocked_page(page_text):
+            logger.warning("[WebSurfer] 검색 차단 감지, 네이버로 폴백")
             search_url = f"https://search.naver.com/search.naver?query={encoded}"
             await self._page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
             self._current_url = self._page.url
@@ -322,14 +542,17 @@ class WebSurfer:
                 await self._page.goto(link_url, wait_until="domcontentloaded", timeout=12000)
                 self._current_url = self._page.url
                 await asyncio.sleep(1.5)
+                await self._dismiss_popups()
 
-                # reCAPTCHA / 차단 페이지 감지 → 스킵
+                # 차단 페이지 감지 (reCAPTCHA / Cloudflare / 빈 페이지) → 스킵 + 검색 페이지 복귀
                 check_text = await self._page.evaluate("document.body.innerText")
-                if "I'm not a robot" in check_text or "reCAPTCHA" in check_text:
-                    logger.warning("[WebSurfer] search_deep: 결과 %d reCAPTCHA 감지, 스킵", i + 1)
-                    continue
-                if len(check_text.strip()) < 50:
-                    logger.warning("[WebSurfer] search_deep: 결과 %d 빈 페이지, 스킵", i + 1)
+                if self._is_blocked_page(check_text):
+                    logger.warning("[WebSurfer] search_deep: 결과 %d 차단/빈 페이지 감지, 스킵", i + 1)
+                    try:
+                        await self._page.goto(search_page_url, wait_until="domcontentloaded", timeout=10000)
+                        self._current_url = search_page_url
+                    except Exception:
+                        pass
                     continue
 
                 # 페이지 텍스트 수집 + 스크롤
@@ -422,6 +645,8 @@ class WebSurfer:
     async def _collect_page_with_scroll(self, max_scrolls: int = 2) -> str:
         """현재 페이지의 텍스트를 수집하면서 스크롤하여 추가 콘텐츠를 확보한다.
 
+        YouTube 페이지인 경우 '더보기' 버튼을 클릭하여 설명란을 펼친다.
+
         Args:
             max_scrolls: 최대 스크롤 횟수 (기본 2)
 
@@ -430,6 +655,11 @@ class WebSurfer:
         """
         if not self._page:
             return ""
+
+        # YouTube 페이지 감지 → '더보기' 클릭
+        current_url = self._page.url
+        if "youtube.com" in current_url or "youtu.be" in current_url:
+            await self._youtube_expand_description()
 
         # 초기 텍스트
         text = await self._page.evaluate("document.body.innerText")
@@ -448,6 +678,47 @@ class WebSurfer:
                 break
 
         return text
+
+    async def _youtube_expand_description(self) -> None:
+        """YouTube 영상 페이지의 '더보기' 버튼을 클릭하여 설명란을 펼친다.
+
+        설명란에는 가사, 프롬프트, 크레딧, 참고 자료 등 유용한 정보가 포함될 수 있다.
+        """
+        try:
+            # 방법 1: 설명 영역의 '더보기' 버튼 (tp-yt-paper-button#expand)
+            expand_btn = self._page.locator("tp-yt-paper-button#expand")
+            if await expand_btn.count() > 0:
+                await expand_btn.first.click()
+                await asyncio.sleep(1.0)
+                logger.info("[WebSurfer] YouTube '더보기' 클릭 완료 (expand 버튼)")
+                return
+
+            # 방법 2: 설명 영역 자체를 클릭 (새 YouTube UI)
+            desc_snippet = self._page.locator(
+                "ytd-text-inline-expander #snippet, "
+                "ytd-text-inline-expander .ytd-text-inline-expander"
+            )
+            if await desc_snippet.count() > 0:
+                await desc_snippet.first.click()
+                await asyncio.sleep(1.0)
+                logger.info("[WebSurfer] YouTube 설명 영역 클릭으로 펼침 완료")
+                return
+
+            # 방법 3: '...더보기' 텍스트가 있는 버튼 (다국어 대응)
+            more_btn = self._page.locator(
+                "button:has-text('더보기'), "
+                "button:has-text('more'), "
+                "button:has-text('Show more')"
+            ).first
+            if await more_btn.count() > 0:
+                await more_btn.click()
+                await asyncio.sleep(1.0)
+                logger.info("[WebSurfer] YouTube '더보기' 텍스트 버튼 클릭 완료")
+                return
+
+            logger.debug("[WebSurfer] YouTube '더보기' 버튼 없음 (이미 펼쳐져 있거나 설명 없음)")
+        except Exception as e:
+            logger.debug("[WebSurfer] YouTube '더보기' 클릭 실패 (무시): %s", e)
 
     async def scroll_down(self):
         """페이지 스크롤 다운."""
@@ -483,6 +754,7 @@ class WebSurfer:
             return {"error": "이미 웹서핑 중입니다."}
 
         self._busy = True
+        self._busy_since = time.time()
         try:
             if not self._running:
                 await self.start()
@@ -511,7 +783,9 @@ class WebSurfer:
                 page_text = await self.search(query)
                 await asyncio.sleep(1)
                 detail_text = await self.click_result(0)
-                if "클릭 실패" not in detail_text and "없습니다" not in detail_text:
+                if ("클릭 실패" not in detail_text
+                        and "없습니다" not in detail_text
+                        and not self._is_blocked_page(detail_text)):
                     page_text = detail_text
                 results_list = None
 
@@ -544,6 +818,7 @@ class WebSurfer:
             return {"success": False, "error": str(e)}
         finally:
             self._busy = False
+            self._busy_since = 0.0
 
     # ── LLM 연동 ──────────────────────────────────────────────────
 
