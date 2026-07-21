@@ -99,3 +99,6 @@ modules/training/*.err
 
 # Stockfish 바이너리 (대용량)
 modules/chess/stockfish/
+
+modules/browser_agent/data/
+modules/data/
